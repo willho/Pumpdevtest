@@ -59,7 +59,7 @@ export async function checkTradeResumeCompletion(
 }
 
 export function connectTestPumpDev() {
-  const wsUrl = "wss://api.pumpdev.io/ws";
+  const wsUrl = "wss://pumpdev.io/ws";
   let ws: WebSocket;
 
   try {
