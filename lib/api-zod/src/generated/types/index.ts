@@ -6,4 +6,15 @@
  * OpenAPI spec version: 0.1.0
  */
 
+export * from "./apiError";
 export * from "./healthStatus";
+export * from "./latencyStats";
+export * from "./okResponse";
+export * from "./proxyReconnectedRequest";
+export * from "./recordTradeRequest";
+export * from "./registerProxyRequest";
+export * from "./testReport";
+export * from "./testStarted";
+export * from "./testStatus";
+export * from "./testStopped";
+export * from "./tokenRecord";

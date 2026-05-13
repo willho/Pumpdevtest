@@ -5,18 +5,33 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import type {
+  MutationFunction,
   QueryFunction,
   QueryKey,
+  UseMutationOptions,
+  UseMutationResult,
   UseQueryOptions,
   UseQueryResult,
 } from "@tanstack/react-query";
 
-import type { HealthStatus } from "./api.schemas";
+import type {
+  ApiError,
+  HealthStatus,
+  OkResponse,
+  ProxyReconnectedRequest,
+  RecordTradeRequest,
+  RegisterProxyRequest,
+  TestReport,
+  TestStarted,
+  TestStatus,
+  TestStopped,
+  TokenRecord,
+} from "./api.schemas";
 
 import { customFetch } from "../custom-fetch";
-import type { ErrorType } from "../custom-fetch";
+import type { ErrorType, BodyType } from "../custom-fetch";
 
 type AwaitedInput<T> = PromiseLike<T> | T;
 
@@ -25,7 +40,6 @@ type Awaited<O> = O extends AwaitedInput<infer T> ? T : never;
 type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
 
 /**
- * Returns server health status
  * @summary Health check
  */
 export const getHealthCheckUrl = () => {
@@ -99,3 +113,664 @@ export function useHealthCheck<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * @summary Start the stress test
+ */
+export const getStartTestUrl = (mode: "SINGLE" | "DUAL" | "TRIPLE") => {
+  return `/api/test/start/${mode}`;
+};
+
+export const startTest = async (
+  mode: "SINGLE" | "DUAL" | "TRIPLE",
+  options?: RequestInit,
+): Promise<TestStarted> => {
+  return customFetch<TestStarted>(getStartTestUrl(mode), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getStartTestMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof startTest>>,
+    TError,
+    { mode: "SINGLE" | "DUAL" | "TRIPLE" },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof startTest>>,
+  TError,
+  { mode: "SINGLE" | "DUAL" | "TRIPLE" },
+  TContext
+> => {
+  const mutationKey = ["startTest"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof startTest>>,
+    { mode: "SINGLE" | "DUAL" | "TRIPLE" }
+  > = (props) => {
+    const { mode } = props ?? {};
+
+    return startTest(mode, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type StartTestMutationResult = NonNullable<
+  Awaited<ReturnType<typeof startTest>>
+>;
+
+export type StartTestMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Start the stress test
+ */
+export const useStartTest = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof startTest>>,
+    TError,
+    { mode: "SINGLE" | "DUAL" | "TRIPLE" },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof startTest>>,
+  TError,
+  { mode: "SINGLE" | "DUAL" | "TRIPLE" },
+  TContext
+> => {
+  return useMutation(getStartTestMutationOptions(options));
+};
+
+/**
+ * @summary Stop the stress test
+ */
+export const getStopTestUrl = () => {
+  return `/api/test/stop`;
+};
+
+export const stopTest = async (options?: RequestInit): Promise<TestStopped> => {
+  return customFetch<TestStopped>(getStopTestUrl(), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getStopTestMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof stopTest>>,
+    TError,
+    void,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof stopTest>>,
+  TError,
+  void,
+  TContext
+> => {
+  const mutationKey = ["stopTest"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof stopTest>>,
+    void
+  > = () => {
+    return stopTest(requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type StopTestMutationResult = NonNullable<
+  Awaited<ReturnType<typeof stopTest>>
+>;
+
+export type StopTestMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Stop the stress test
+ */
+export const useStopTest = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof stopTest>>,
+    TError,
+    void,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof stopTest>>,
+  TError,
+  void,
+  TContext
+> => {
+  return useMutation(getStopTestMutationOptions(options));
+};
+
+/**
+ * @summary Get current test status
+ */
+export const getGetTestStatusUrl = () => {
+  return `/api/test/status`;
+};
+
+export const getTestStatus = async (
+  options?: RequestInit,
+): Promise<TestStatus> => {
+  return customFetch<TestStatus>(getGetTestStatusUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetTestStatusQueryKey = () => {
+  return [`/api/test/status`] as const;
+};
+
+export const getGetTestStatusQueryOptions = <
+  TData = Awaited<ReturnType<typeof getTestStatus>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getTestStatus>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetTestStatusQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getTestStatus>>> = ({
+    signal,
+  }) => getTestStatus({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getTestStatus>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetTestStatusQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getTestStatus>>
+>;
+export type GetTestStatusQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get current test status
+ */
+
+export function useGetTestStatus<
+  TData = Awaited<ReturnType<typeof getTestStatus>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getTestStatus>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetTestStatusQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Get final test report
+ */
+export const getGetTestReportUrl = () => {
+  return `/api/test/report`;
+};
+
+export const getTestReport = async (
+  options?: RequestInit,
+): Promise<TestReport> => {
+  return customFetch<TestReport>(getGetTestReportUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetTestReportQueryKey = () => {
+  return [`/api/test/report`] as const;
+};
+
+export const getGetTestReportQueryOptions = <
+  TData = Awaited<ReturnType<typeof getTestReport>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getTestReport>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetTestReportQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getTestReport>>> = ({
+    signal,
+  }) => getTestReport({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getTestReport>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetTestReportQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getTestReport>>
+>;
+export type GetTestReportQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get final test report
+ */
+
+export function useGetTestReport<
+  TData = Awaited<ReturnType<typeof getTestReport>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getTestReport>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetTestReportQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Get tokens assigned to a provider
+ */
+export const getGetTokensByProviderUrl = (provider: string) => {
+  return `/api/tokens/${provider}`;
+};
+
+export const getTokensByProvider = async (
+  provider: string,
+  options?: RequestInit,
+): Promise<TokenRecord[]> => {
+  return customFetch<TokenRecord[]>(getGetTokensByProviderUrl(provider), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetTokensByProviderQueryKey = (provider: string) => {
+  return [`/api/tokens/${provider}`] as const;
+};
+
+export const getGetTokensByProviderQueryOptions = <
+  TData = Awaited<ReturnType<typeof getTokensByProvider>>,
+  TError = ErrorType<unknown>,
+>(
+  provider: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getTokensByProvider>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetTokensByProviderQueryKey(provider);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getTokensByProvider>>
+  > = ({ signal }) =>
+    getTokensByProvider(provider, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!provider,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getTokensByProvider>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetTokensByProviderQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getTokensByProvider>>
+>;
+export type GetTokensByProviderQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get tokens assigned to a provider
+ */
+
+export function useGetTokensByProvider<
+  TData = Awaited<ReturnType<typeof getTokensByProvider>>,
+  TError = ErrorType<unknown>,
+>(
+  provider: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getTokensByProvider>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetTokensByProviderQueryOptions(provider, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Register a proxy provider connection
+ */
+export const getRegisterProxyUrl = () => {
+  return `/api/proxy/register`;
+};
+
+export const registerProxy = async (
+  registerProxyRequest: RegisterProxyRequest,
+  options?: RequestInit,
+): Promise<OkResponse> => {
+  return customFetch<OkResponse>(getRegisterProxyUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(registerProxyRequest),
+  });
+};
+
+export const getRegisterProxyMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof registerProxy>>,
+    TError,
+    { data: BodyType<RegisterProxyRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof registerProxy>>,
+  TError,
+  { data: BodyType<RegisterProxyRequest> },
+  TContext
+> => {
+  const mutationKey = ["registerProxy"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof registerProxy>>,
+    { data: BodyType<RegisterProxyRequest> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return registerProxy(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RegisterProxyMutationResult = NonNullable<
+  Awaited<ReturnType<typeof registerProxy>>
+>;
+export type RegisterProxyMutationBody = BodyType<RegisterProxyRequest>;
+export type RegisterProxyMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Register a proxy provider connection
+ */
+export const useRegisterProxy = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof registerProxy>>,
+    TError,
+    { data: BodyType<RegisterProxyRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof registerProxy>>,
+  TError,
+  { data: BodyType<RegisterProxyRequest> },
+  TContext
+> => {
+  return useMutation(getRegisterProxyMutationOptions(options));
+};
+
+/**
+ * @summary Notify that a proxy provider has reconnected
+ */
+export const getNotifyProxyReconnectedUrl = () => {
+  return `/api/proxy/reconnected`;
+};
+
+export const notifyProxyReconnected = async (
+  proxyReconnectedRequest: ProxyReconnectedRequest,
+  options?: RequestInit,
+): Promise<OkResponse> => {
+  return customFetch<OkResponse>(getNotifyProxyReconnectedUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(proxyReconnectedRequest),
+  });
+};
+
+export const getNotifyProxyReconnectedMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof notifyProxyReconnected>>,
+    TError,
+    { data: BodyType<ProxyReconnectedRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof notifyProxyReconnected>>,
+  TError,
+  { data: BodyType<ProxyReconnectedRequest> },
+  TContext
+> => {
+  const mutationKey = ["notifyProxyReconnected"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof notifyProxyReconnected>>,
+    { data: BodyType<ProxyReconnectedRequest> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return notifyProxyReconnected(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type NotifyProxyReconnectedMutationResult = NonNullable<
+  Awaited<ReturnType<typeof notifyProxyReconnected>>
+>;
+export type NotifyProxyReconnectedMutationBody =
+  BodyType<ProxyReconnectedRequest>;
+export type NotifyProxyReconnectedMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Notify that a proxy provider has reconnected
+ */
+export const useNotifyProxyReconnected = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof notifyProxyReconnected>>,
+    TError,
+    { data: BodyType<ProxyReconnectedRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof notifyProxyReconnected>>,
+  TError,
+  { data: BodyType<ProxyReconnectedRequest> },
+  TContext
+> => {
+  return useMutation(getNotifyProxyReconnectedMutationOptions(options));
+};
+
+/**
+ * @summary Record a trade from a proxy provider
+ */
+export const getRecordTradeUrl = () => {
+  return `/api/trades`;
+};
+
+export const recordTrade = async (
+  recordTradeRequest: RecordTradeRequest,
+  options?: RequestInit,
+): Promise<OkResponse> => {
+  return customFetch<OkResponse>(getRecordTradeUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(recordTradeRequest),
+  });
+};
+
+export const getRecordTradeMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof recordTrade>>,
+    TError,
+    { data: BodyType<RecordTradeRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof recordTrade>>,
+  TError,
+  { data: BodyType<RecordTradeRequest> },
+  TContext
+> => {
+  const mutationKey = ["recordTrade"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof recordTrade>>,
+    { data: BodyType<RecordTradeRequest> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return recordTrade(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RecordTradeMutationResult = NonNullable<
+  Awaited<ReturnType<typeof recordTrade>>
+>;
+export type RecordTradeMutationBody = BodyType<RecordTradeRequest>;
+export type RecordTradeMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Record a trade from a proxy provider
+ */
+export const useRecordTrade = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof recordTrade>>,
+    TError,
+    { data: BodyType<RecordTradeRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof recordTrade>>,
+  TError,
+  { data: BodyType<RecordTradeRequest> },
+  TContext
+> => {
+  return useMutation(getRecordTradeMutationOptions(options));
+};

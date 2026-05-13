@@ -1,0 +1,19 @@
+kind = "web"
+previewPath = "/"
+title = "Stress Test Dashboard"
+version = "1.0.0"
+id = "artifacts/dashboard"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 8080
+
+[services.env]
+PORT = "8080"
+BASE_PATH = "/"

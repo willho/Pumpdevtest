@@ -1,6 +1,5 @@
 openapi: 3.1.0
 info:
-  # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
   description: API specification
@@ -10,13 +9,20 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: test
+    description: Stress test operations
+  - name: proxy
+    description: Proxy provider operations
+  - name: trades
+    description: Trade recording
+  - name: tokens
+    description: Token queries
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
       summary: Health check
-      description: Returns server health status
       responses:
         "200":
           description: Healthy
@@ -24,6 +30,150 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /test/start/{mode}:
+    post:
+      operationId: startTest
+      tags: [test]
+      summary: Start the stress test
+      parameters:
+        - name: mode
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [SINGLE, DUAL, TRIPLE]
+      responses:
+        "200":
+          description: Test started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestStarted"
+        "400":
+          description: Invalid mode or already running
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /test/stop:
+    post:
+      operationId: stopTest
+      tags: [test]
+      summary: Stop the stress test
+      responses:
+        "200":
+          description: Test stopped
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestStopped"
+
+  /test/status:
+    get:
+      operationId: getTestStatus
+      tags: [test]
+      summary: Get current test status
+      responses:
+        "200":
+          description: Current status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestStatus"
+
+  /test/report:
+    get:
+      operationId: getTestReport
+      tags: [test]
+      summary: Get final test report
+      responses:
+        "200":
+          description: Test report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestReport"
+
+  /tokens/{provider}:
+    get:
+      operationId: getTokensByProvider
+      tags: [tokens]
+      summary: Get tokens assigned to a provider
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of tokens
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TokenRecord"
+
+  /proxy/register:
+    post:
+      operationId: registerProxy
+      tags: [proxy]
+      summary: Register a proxy provider connection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterProxyRequest"
+      responses:
+        "200":
+          description: Registered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+
+  /proxy/reconnected:
+    post:
+      operationId: notifyProxyReconnected
+      tags: [proxy]
+      summary: Notify that a proxy provider has reconnected
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProxyReconnectedRequest"
+      responses:
+        "200":
+          description: Acknowledged
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+
+  /trades:
+    post:
+      operationId: recordTrade
+      tags: [trades]
+      summary: Record a trade from a proxy provider
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecordTradeRequest"
+      responses:
+        "200":
+          description: Trade recorded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+
 components:
   schemas:
     HealthStatus:
@@ -31,6 +181,136 @@ components:
       properties:
         status:
           type: string
-      required:
-        - status
+      required: [status]
 
+    ApiError:
+      type: object
+      properties:
+        error:
+          type: string
+      required: [error]
+
+    OkResponse:
+      type: object
+      properties:
+        status:
+          type: string
+      required: [status]
+
+    TestStarted:
+      type: object
+      properties:
+        status:
+          type: string
+        mode:
+          type: string
+      required: [status, mode]
+
+    TestStopped:
+      type: object
+      properties:
+        status:
+          type: string
+      required: [status]
+
+    LatencyStats:
+      type: object
+      properties:
+        best:
+          type: number
+        worst:
+          type: number
+        avg:
+          type: number
+        count:
+          type: number
+      required: [best, worst, avg, count]
+
+    TestStatus:
+      type: object
+      properties:
+        isRunning:
+          type: boolean
+        mode:
+          type: string
+          nullable: true
+        totalTokens:
+          type: number
+        totalTrades:
+          type: number
+        subscriptionsCount:
+          type: number
+        capacityLimit:
+          type: number
+        rotationCount:
+          type: number
+        connectedProviders:
+          type: array
+          items:
+            type: string
+        reconnectStats:
+          $ref: "#/components/schemas/LatencyStats"
+        tradeResumeStats:
+          $ref: "#/components/schemas/LatencyStats"
+        logs:
+          type: array
+          items:
+            type: string
+      required:
+        - isRunning
+        - mode
+        - totalTokens
+        - totalTrades
+        - subscriptionsCount
+        - capacityLimit
+        - rotationCount
+        - connectedProviders
+        - reconnectStats
+        - tradeResumeStats
+        - logs
+
+    TestReport:
+      type: object
+      properties:
+        report:
+          type: string
+      required: [report]
+
+    TokenRecord:
+      type: object
+      properties:
+        mint:
+          type: string
+        provider1:
+          type: string
+        provider2:
+          type: string
+          nullable: true
+      required: [mint, provider1]
+
+    RegisterProxyRequest:
+      type: object
+      properties:
+        provider:
+          type: string
+      required: [provider]
+
+    ProxyReconnectedRequest:
+      type: object
+      properties:
+        provider:
+          type: string
+        resetTime:
+          type: number
+      required: [provider, resetTime]
+
+    RecordTradeRequest:
+      type: object
+      properties:
+        mint:
+          type: string
+        provider:
+          type: string
+        signature:
+          type: string
+      required: [mint, provider, signature]

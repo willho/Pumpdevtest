@@ -1,0 +1,868 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Stress Test with Rotation - Main</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Courier New', monospace; background: #1a1a1a; color: #00ff00; padding: 20px; }
+    .container { max-width: 1200px; margin: 0 auto; }
+    h1 { margin: 20px 0; }
+    .section { background: #222; border: 1px solid #00ff00; border-radius: 4px; padding: 15px; margin-bottom: 15px; }
+    .code-block { background: #000; border: 1px solid #00ff00; padding: 12px; border-radius: 4px; overflow-x: auto; font-size: 0.85em; margin: 10px 0; max-height: 700px; overflow-y: auto; }
+    button { background: #00ff00; color: #000; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-weight: bold; font-family: monospace; }
+    button:hover { background: #00cc00; }
+    .copy-btn { background: #00aa00; padding: 5px 10px; font-size: 0.9em; }
+    code { background: #111; padding: 2px 6px; border-radius: 2px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🔥 Stress Test with Rotation (Main)</h1>
+    <p style="margin-bottom: 20px; opacity: 0.8;">99% capacity limits + rotation at saturation</p>
+
+    <div class="section">
+      <h2>Setup</h2>
+      <ol style="margin-left: 20px;">
+        <li>Create files below</li>
+        <li>Run schema.sql on Neon</li>
+        <li>Update .env with Neon connection string</li>
+        <li>Run: <code>npm install && npm start</code></li>
+      </ol>
+    </div>
+
+    <!-- FILE: package.json -->
+    <div class="section">
+      <h2>📄 package.json</h2>
+      <button class="copy-btn" onclick="copyToClipboard('packageJson')">📋 Copy</button>
+      <div class="code-block" id="packageJson">{
+  "name": "stress-test-rotation",
+  "version": "1.0.0",
+  "description": "Stress test with 99% capacity limits and rotation",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "ws": "^8.13.0",
+    "pg": "^8.11.3",
+    "dotenv": "^16.0.3"
+  }
+}</div>
+    </div>
+
+    <!-- FILE: .env -->
+    <div class="section">
+      <h2>📄 .env</h2>
+      <button class="copy-btn" onclick="copyToClipboard('envFile')">📋 Copy</button>
+      <div class="code-block" id="envFile">PORT=3000
+DATABASE_URL=postgresql://user:password@host.neon.tech/dbname?sslmode=require</div>
+    </div>
+
+    <!-- FILE: schema.sql -->
+    <div class="section">
+      <h2>📄 schema.sql</h2>
+      <button class="copy-btn" onclick="copyToClipboard('schema')">📋 Copy</button>
+      <div class="code-block" id="schema">CREATE TABLE tokens (
+  id SERIAL PRIMARY KEY,
+  mint VARCHAR(255) NOT NULL UNIQUE,
+  provider1 VARCHAR(50) NOT NULL,
+  provider2 VARCHAR(50),
+  assigned_at BIGINT NOT NULL,
+  subscribed_at BIGINT,
+  unsubscribed_at BIGINT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE trades (
+  id SERIAL PRIMARY KEY,
+  mint VARCHAR(255) NOT NULL,
+  provider VARCHAR(50) NOT NULL,
+  signature VARCHAR(255) NOT NULL,
+  received_at BIGINT NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE resets (
+  id SERIAL PRIMARY KEY,
+  provider VARCHAR(50) NOT NULL,
+  reset_triggered_at BIGINT NOT NULL,
+  reconnect_at BIGINT,
+  first_trade_after_at BIGINT,
+  reconnect_latency_ms INT,
+  trade_resume_latency_ms INT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_tokens_provider1 ON tokens(provider1);
+CREATE INDEX idx_tokens_provider2 ON tokens(provider2);
+CREATE INDEX idx_tokens_subscribed ON tokens(subscribed_at);
+CREATE INDEX idx_tokens_unsubscribed ON tokens(unsubscribed_at);
+CREATE INDEX idx_trades_mint ON trades(mint);
+CREATE INDEX idx_trades_provider ON trades(provider);
+CREATE INDEX idx_trades_received_at ON trades(received_at);
+CREATE INDEX idx_resets_provider ON resets(provider);</div>
+    </div>
+
+    <!-- FILE: server.js -->
+    <div class="section">
+      <h2>📄 server.js</h2>
+      <button class="copy-btn" onclick="copyToClipboard('serverJs')">📋 Copy</button>
+      <div class="code-block" id="serverJs">require('dotenv').config();
+const express = require('express');
+const WebSocket = require('ws');
+const { Pool } = require('pg');
+const app = express();
+
+const PORT = process.env.PORT || 3000;
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+
+const DETECTION_WINDOW = 5000;
+const CHECK_INTERVAL = 1000;
+const RESET_COOLDOWN = 30000;
+
+const CAPACITY_LIMITS = {
+  SINGLE: 4950,   // 5000 × 0.99
+  DUAL: 4950,
+  TRIPLE: 7425,   // 7500 × 0.99
+};
+
+const state = {
+  isRunning: false,
+  mode: null,
+  testConnection: null,
+  totalTokens: 0,
+  totalTrades: 0,
+  subscriptionsCount: 0,
+  connectedProviders: new Set(['test']),
+  stalledProviders: new Set(),
+  resetTimestamps: { test: 0, proxy2: 0, proxy3: 0 },
+  rotationCount: 0,
+  reconnectStats: { best: Infinity, worst: 0, all: [] },
+  tradeResumeStats: { best: Infinity, worst: 0, all: [] },
+  logs: [],
+};
+
+function log(message, level = 'info') {
+  const ts = new Date().toISOString();
+  const entry = \`[\${ts}] [\${level.toUpperCase()}] \${message}\`;
+  state.logs.push(entry);
+  console.log(entry);
+}
+
+function connectTestPumpDev() {
+  const wsUrl = 'wss://api.pumpdev.io/ws';
+  let ws;
+
+  try {
+    ws = new WebSocket(wsUrl);
+    state.testConnection = ws;
+
+    ws.onopen = () => {
+      log('[test] Connected to PumpDev', 'info');
+    };
+
+    ws.onmessage = async (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.error || !data.signature) return;
+
+        state.totalTrades++;
+        const now = Date.now();
+        await pool.query(
+          'INSERT INTO trades (mint, provider, signature, received_at) VALUES (\$1, \$2, \$3, \$4)',
+          [data.mint, 'test', data.signature, now]
+        );
+
+        await checkTradeResumeCompletion('test', now);
+      } catch (e) {
+        log(\`[test] Error: \${e.message}\`, 'error');
+      }
+    };
+
+    ws.onerror = (error) => {
+      log(\`[test] WebSocket error: \${error.message}\`, 'error');
+    };
+
+    ws.onclose = () => {
+      log('[test] Connection closed - reconnecting in 2s', 'warn');
+      setTimeout(() => connectTestPumpDev(), 2000);
+    };
+  } catch (e) {
+    log(\`[test] Failed to connect: \${e.message}\`, 'error');
+  }
+}
+
+async function subscribeTokens(mints, provider = 'test') {
+  const ws = state.testConnection;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+
+  if (mints.length === 0) return false;
+
+  try {
+    ws.send(JSON.stringify({
+      method: 'subscribeTokenTrade',
+      keys: mints,
+    }));
+
+    const now = Date.now();
+    await pool.query(
+      'UPDATE tokens SET subscribed_at = \$1 WHERE mint = ANY(\$2)',
+      [now, mints]
+    );
+
+    state.subscriptionsCount += mints.length;
+    return true;
+  } catch (e) {
+    log(\`Failed to subscribe: \${e.message}\`, 'error');
+    return false;
+  }
+}
+
+async function unsubscribeToken(mint, provider = 'test') {
+  const ws = state.testConnection;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+
+  try {
+    ws.send(JSON.stringify({
+      method: 'unsubscribeTokenTrade',
+      keys: [mint],
+    }));
+
+    const now = Date.now();
+    await pool.query(
+      'UPDATE tokens SET unsubscribed_at = \$1 WHERE mint = \$2',
+      [now, mint]
+    );
+
+    state.subscriptionsCount--;
+    state.rotationCount++;
+    return true;
+  } catch (e) {
+    log(\`Failed to unsubscribe: \${e.message}\`, 'error');
+    return false;
+  }
+}
+
+async function handleTokenAtCapacity(mint, provider) {
+  const limit = CAPACITY_LIMITS[state.mode];
+
+  if (state.subscriptionsCount >= limit) {
+    const result = await pool.query(
+      'SELECT mint FROM tokens WHERE subscribed_at IS NOT NULL AND unsubscribed_at IS NULL AND provider1 = \$1 ORDER BY subscribed_at ASC LIMIT 1',
+      [provider]
+    );
+
+    if (result.rows.length > 0) {
+      const oldestMint = result.rows[0].mint;
+      await unsubscribeToken(oldestMint, provider);
+      await subscribeTokens([mint], provider);
+      log(\`🔄 Rotation: unsubscribed \${oldestMint.slice(0, 8)}..., subscribed \${mint.slice(0, 8)}...\`, 'info');
+      return;
+    }
+  }
+
+  await subscribeTokens([mint], provider);
+}
+
+async function detectStalls() {
+  if (!state.isRunning || !state.mode) return;
+
+  try {
+    const now = Date.now();
+    const windowStart = now - DETECTION_WINDOW;
+
+    const tokensResult = await pool.query(
+      'SELECT mint, provider1, provider2 FROM tokens WHERE (provider1 IN (\$1, \$2, \$3) OR provider2 IN (\$1, \$2, \$3))',
+      [Array.from(state.connectedProviders)].flat().slice(0, 3)
+    );
+
+    const expectedProviders = {};
+    const missingProviders = {};
+
+    for (const token of tokensResult.rows) {
+      const providers = [];
+      if (state.connectedProviders.has(token.provider1)) providers.push(token.provider1);
+      if (token.provider2 && state.connectedProviders.has(token.provider2)) providers.push(token.provider2);
+      expectedProviders[token.mint] = providers;
+      missingProviders[token.mint] = new Set(providers);
+    }
+
+    const tradesResult = await pool.query(
+      'SELECT DISTINCT mint, provider FROM trades WHERE received_at > \$1',
+      [windowStart]
+    );
+
+    for (const trade of tradesResult.rows) {
+      if (missingProviders[trade.mint]) {
+        missingProviders[trade.mint].delete(trade.provider);
+      }
+    }
+
+    const newStalled = new Set();
+    for (const [mint, missing] of Object.entries(missingProviders)) {
+      for (const provider of missing) {
+        if (expectedProviders[mint].includes(provider)) {
+          newStalled.add(provider);
+        }
+      }
+    }
+
+    for (const provider of newStalled) {
+      const timeSinceLastReset = now - state.resetTimestamps[provider];
+      if (timeSinceLastReset > RESET_COOLDOWN) {
+        state.resetTimestamps[provider] = now;
+
+        await pool.query(
+          'INSERT INTO resets (provider, reset_triggered_at) VALUES (\$1, \$2)',
+          [provider, now]
+        );
+
+        if (provider === 'test') {
+          log(\`🔄 [test] Connection stalled - resetting\`, 'warn');
+          state.testConnection?.close();
+        } else {
+          log(\`🔄 Resetting \${provider}\`, 'warn');
+        }
+      }
+    }
+
+    state.stalledProviders = newStalled;
+  } catch (e) {
+    log(\`Detection error: \${e.message}\`, 'error');
+  }
+}
+
+async function checkTradeResumeCompletion(provider, tradeTime) {
+  try {
+    const result = await pool.query(
+      'SELECT id, reset_triggered_at FROM resets WHERE provider = \$1 AND first_trade_after_at IS NULL ORDER BY reset_triggered_at DESC LIMIT 1',
+      [provider]
+    );
+
+    if (result.rows.length > 0) {
+      const reset = result.rows[0];
+      const resumeLatency = tradeTime - reset.reset_triggered_at;
+
+      await pool.query(
+        'UPDATE resets SET first_trade_after_at = \$1, trade_resume_latency_ms = \$2 WHERE id = \$3',
+        [tradeTime, resumeLatency, reset.id]
+      );
+
+      state.tradeResumeStats.all.push(resumeLatency);
+      state.tradeResumeStats.best = Math.min(state.tradeResumeStats.best, resumeLatency);
+      state.tradeResumeStats.worst = Math.max(state.tradeResumeStats.worst, resumeLatency);
+    }
+  } catch (e) {
+    log(\`Resume check error: \${e.message}\`, 'error');
+  }
+}
+
+async function* streamNewTokens() {
+  const wsUrl = 'wss://pumpportal.fun/api/data';
+  const ws = new WebSocket(wsUrl);
+
+  return new Promise((resolve, reject) => {
+    ws.onopen = () => {
+      log('Connected to PumpPortal', 'info');
+      ws.send(JSON.stringify({ method: 'subscribeNewToken' }));
+    };
+
+    ws.onmessage = async (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.mint) yield data.mint;
+      } catch (e) {
+        log(\`PumpPortal error: \${e.message}\`, 'error');
+      }
+    };
+
+    ws.onerror = (error) => reject(error);
+    ws.onclose = () => log('PumpPortal closed', 'warn');
+  });
+}
+
+async function startTest(mode) {
+  if (state.isRunning) return;
+
+  state.isRunning = true;
+  state.mode = mode;
+  state.logs = [];
+  state.subscriptionsCount = 0;
+  state.rotationCount = 0;
+  state.stalledProviders.clear();
+  state.resetTimestamps = { test: 0, proxy2: 0, proxy3: 0 };
+  state.reconnectStats = { best: Infinity, worst: 0, all: [] };
+  state.tradeResumeStats = { best: Infinity, worst: 0, all: [] };
+  state.totalTokens = 0;
+  state.totalTrades = 0;
+
+  const limit = CAPACITY_LIMITS[mode];
+  log(\`🚀 TEST STARTED (Mode: \${mode}, Limit: \${limit} tokens)\`, 'info');
+
+  await pool.query('TRUNCATE tokens, trades, resets');
+
+  connectTestPumpDev();
+  await new Promise(resolve => setTimeout(resolve, 1000));
+
+  const detectionInterval = setInterval(() => detectStalls(), CHECK_INTERVAL);
+
+  let tokenIndex = 0;
+
+  try {
+    for await (const mint of streamNewTokens()) {
+      if (!state.isRunning) break;
+
+      tokenIndex++;
+      state.totalTokens = tokenIndex;
+
+      let provider1, provider2;
+
+      if (mode === 'SINGLE') {
+        provider1 = 'test';
+        provider2 = null;
+      } else if (mode === 'DUAL') {
+        const connected = Array.from(state.connectedProviders);
+        provider1 = connected[tokenIndex % connected.length];
+        provider2 = connected[(tokenIndex + 1) % connected.length];
+      } else {
+        provider1 = ['test', 'proxy2', 'proxy3'][tokenIndex % 3];
+        provider2 = ['test', 'proxy2', 'proxy3'][(tokenIndex + 1) % 3];
+      }
+
+      await pool.query(
+        'INSERT INTO tokens (mint, provider1, provider2, assigned_at) VALUES (\$1, \$2, \$3, \$4)',
+        [mint, provider1, provider2, Date.now()]
+      );
+
+      if (provider1 === 'test' || provider2 === 'test') {
+        await handleTokenAtCapacity(mint, 'test');
+      }
+
+      log(\`Token \${tokenIndex}: \${mint.slice(0, 8)}... → \${provider1}\${provider2 ? ', ' + provider2 : ''}\`, 'info');
+
+      // Stop at limit or cap reached
+      if (state.subscriptionsCount >= CAPACITY_LIMITS[mode]) {
+        log(\`Reached capacity limit (\${state.subscriptionsCount}/\${limit})\`, 'info');
+        await new Promise(resolve => setTimeout(resolve, 5000)); // Let it run for 5 more seconds
+        break;
+      }
+    }
+  } catch (e) {
+    log(\`Test error: \${e.message}\`, 'error');
+  } finally {
+    clearInterval(detectionInterval);
+  }
+
+  state.isRunning = false;
+  log('✅ TEST COMPLETED', 'info');
+}
+
+function stopTest() {
+  state.isRunning = false;
+  if (state.testConnection) state.testConnection.close();
+  log('❌ TEST STOPPED', 'warn');
+}
+
+app.use(express.static('public'));
+app.use(express.json());
+
+app.post('/api/test/start/:mode', (req, res) => {
+  const mode = req.params.mode.toUpperCase();
+  if (!['SINGLE', 'DUAL', 'TRIPLE'].includes(mode)) {
+    return res.status(400).json({ error: 'Invalid mode' });
+  }
+  if (state.isRunning) return res.status(400).json({ error: 'Already running' });
+  startTest(mode);
+  res.json({ status: 'started', mode });
+});
+
+app.post('/api/test/stop', (req, res) => {
+  stopTest();
+  res.json({ status: 'stopped' });
+});
+
+app.post('/api/proxy/register', (req, res) => {
+  const { provider } = req.body;
+  state.connectedProviders.add(provider);
+  log(\`[Register] \${provider} connected\`, 'info');
+  res.json({ status: 'registered' });
+});
+
+app.post('/api/proxy/reconnected', (req, res) => {
+  const { provider, resetTime } = req.body;
+  const now = Date.now();
+  const reconnectLatency = now - resetTime;
+
+  state.reconnectStats.all.push(reconnectLatency);
+  state.reconnectStats.best = Math.min(state.reconnectStats.best, reconnectLatency);
+  state.reconnectStats.worst = Math.max(state.reconnectStats.worst, reconnectLatency);
+
+  pool.query(
+    'UPDATE resets SET reconnect_at = \$1, reconnect_latency_ms = \$2 WHERE provider = \$3 AND reset_triggered_at = \$4',
+    [now, reconnectLatency, provider, resetTime]
+  ).catch(e => log(\`DB error: \${e.message}\`, 'error'));
+
+  log(\`✓ [\${provider}] Reconnected in \${reconnectLatency}ms\`, 'info');
+  res.json({ status: 'ok' });
+});
+
+app.post('/api/trades', async (req, res) => {
+  try {
+    const { mint, provider, signature } = req.body;
+    const now = Date.now();
+    await pool.query(
+      'INSERT INTO trades (mint, provider, signature, received_at) VALUES (\$1, \$2, \$3, \$4)',
+      [mint, provider, signature, now]
+    );
+    state.totalTrades++;
+    await checkTradeResumeCompletion(provider, now);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/test/status', (req, res) => {
+  res.json({
+    isRunning: state.isRunning,
+    mode: state.mode,
+    totalTokens: state.totalTokens,
+    totalTrades: state.totalTrades,
+    subscriptionsCount: state.subscriptionsCount,
+    capacityLimit: state.mode ? CAPACITY_LIMITS[state.mode] : 0,
+    rotationCount: state.rotationCount,
+    connectedProviders: Array.from(state.connectedProviders),
+    reconnectStats: {
+      best: state.reconnectStats.best === Infinity ? 0 : state.reconnectStats.best,
+      worst: state.reconnectStats.worst,
+      avg: state.reconnectStats.all.length > 0 ? Math.round(state.reconnectStats.all.reduce((a, b) => a + b, 0) / state.reconnectStats.all.length) : 0,
+      count: state.reconnectStats.all.length,
+    },
+    tradeResumeStats: {
+      best: state.tradeResumeStats.best === Infinity ? 0 : state.tradeResumeStats.best,
+      worst: state.tradeResumeStats.worst,
+      avg: state.tradeResumeStats.all.length > 0 ? Math.round(state.tradeResumeStats.all.reduce((a, b) => a + b, 0) / state.tradeResumeStats.all.length) : 0,
+      count: state.tradeResumeStats.all.length,
+    },
+    logs: state.logs.slice(-50),
+  });
+});
+
+app.get('/api/tokens/:provider', async (req, res) => {
+  try {
+    const { provider } = req.params;
+    const result = await pool.query(
+      'SELECT mint, provider1, provider2 FROM tokens WHERE provider1 = \$1 OR provider2 = \$1 LIMIT 200',
+      [provider]
+    );
+    res.json(result.rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/test/report', async (req, res) => {
+  try {
+    const trades = await pool.query('SELECT COUNT(*) FROM trades');
+    const tokens = await pool.query('SELECT COUNT(*) FROM tokens');
+    const resets = await pool.query('SELECT COUNT(*) FROM resets');
+
+    let report = \`
+╔════════════════════════════════════════════════════════════════╗
+║         STRESS TEST WITH ROTATION: FINAL REPORT                ║
+╚════════════════════════════════════════════════════════════════╝
+
+TEST SUMMARY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Mode:                     \${state.mode}
+Capacity Limit (99%):     \${CAPACITY_LIMITS[state.mode]}
+Total Tokens Discovered:  \${tokens.rows[0].count}
+Total Trades Captured:    \${trades.rows[0].count}
+Total Resets Triggered:   \${resets.rows[0].count}
+
+ROTATION PERFORMANCE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Total Rotations:          \${state.rotationCount}
+Rotation Rate:            \${state.totalTokens > 0 ? (state.rotationCount / state.totalTokens * 100).toFixed(2) : 0}% of tokens
+
+RECONNECT PERFORMANCE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Best Reconnect:           \${state.reconnectStats.best === Infinity ? 'N/A' : state.reconnectStats.best + 'ms'}
+Worst Reconnect:          \${state.reconnectStats.worst}ms
+Average Reconnect:        \${state.reconnectStats.avg}ms
+Reconnections Measured:   \${state.reconnectStats.count}
+
+TRADE RESUME LATENCY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Best Resume:              \${state.tradeResumeStats.best === Infinity ? 'N/A' : state.tradeResumeStats.best + 'ms'}
+Worst Resume:             \${state.tradeResumeStats.worst}ms
+Average Resume:           \${state.tradeResumeStats.avg}ms
+Resumptions Measured:     \${state.tradeResumeStats.count}
+
+CONCLUSIONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✓ Capacity limit held:    \${state.subscriptionsCount <= CAPACITY_LIMITS[state.mode] ? 'YES' : 'NO'}
+✓ Rotations handled:      \${state.rotationCount} tokens cycled
+✓ Reset resilience:       \${state.reconnectStats.count} resets with avg \${state.reconnectStats.avg}ms reconnect
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\`;
+
+    res.json({ report });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.listen(PORT, () => {
+  log(\`Server running on http://localhost:\${PORT}\`, 'info');
+});</div>
+    </div>
+
+    <!-- FILE: public/index.html -->
+    <div class="section">
+      <h2>📄 public/index.html</h2>
+      <button class="copy-btn" onclick="copyToClipboard('indexHtml')">📋 Copy</button>
+      <div class="code-block" id="indexHtml"><!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Stress Test with Rotation</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Courier New', monospace; background: #1a1a1a; color: #00ff00; padding: 20px; }
+    .container { max-width: 1400px; margin: 0 auto; }
+    h1 { margin-bottom: 20px; }
+    .section { background: #222; border: 1px solid #00ff00; border-radius: 4px; padding: 15px; margin-bottom: 15px; }
+    .mode-select { display: flex; gap: 10px; margin-bottom: 20px; }
+    button { background: #00ff00; color: #000; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-weight: bold; font-family: monospace; }
+    button:hover { background: #00cc00; }
+    button:disabled { background: #666; cursor: not-allowed; }
+    button.selected { background: #ff6600; }
+    .status {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+    .stat { background: #111; border: 1px solid #00ff00; padding: 10px; border-radius: 4px; }
+    .stat-label { font-size: 0.9em; opacity: 0.7; }
+    .stat-value { font-size: 1.4em; font-weight: bold; }
+    .log {
+      background: #000;
+      border: 1px solid #00ff00;
+      padding: 12px;
+      border-radius: 4px;
+      height: 250px;
+      overflow-y: auto;
+      font-size: 0.85em;
+      margin-bottom: 20px;
+    }
+    .log-entry { margin-bottom: 4px; }
+    .log-entry.INFO { color: #00ff00; }
+    .log-entry.WARN { color: #ffaa00; }
+    .log-entry.ERROR { color: #ff4444; }
+    .timing-box { background: #111; border: 1px solid #ffaa00; padding: 12px; border-radius: 4px; margin: 10px 0; font-size: 0.9em; }
+    .timing-label { opacity: 0.7; }
+    .timing-value { font-size: 1.2em; font-weight: bold; color: #ffaa00; }
+    .report { background: #111; border: 2px solid #00ff00; padding: 15px; border-radius: 4px; white-space: pre-wrap; font-size: 0.9em; max-height: 500px; overflow-y: auto; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🔥 Stress Test with Rotation</h1>
+    <p style="margin-bottom: 20px; opacity: 0.8;">99% capacity limits, rotation at saturation, reconnect timing</p>
+
+    <div class="section">
+      <h3>Select Mode</h3>
+      <div class="mode-select">
+        <button id="singleBtn" onclick="selectMode('SINGLE')" class="selected">SINGLE (4950)</button>
+        <button id="dualBtn" onclick="selectMode('DUAL')">DUAL (4950)</button>
+        <button id="tripleBtn" onclick="selectMode('TRIPLE')">TRIPLE (7425)</button>
+      </div>
+      <button id="startBtn" onclick="startTest()">START TEST</button>
+      <button id="stopBtn" onclick="stopTest()" disabled>STOP TEST</button>
+      <button id="reportBtn" onclick="showReport()" disabled>GENERATE REPORT</button>
+    </div>
+
+    <div class="section">
+      <div class="status">
+        <div class="stat">
+          <div class="stat-label">Mode</div>
+          <div class="stat-value" id="mode">-</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Subscriptions</div>
+          <div class="stat-value" id="subscriptions">0</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Capacity Limit</div>
+          <div class="stat-value" id="capacityLimit">-</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Total Tokens</div>
+          <div class="stat-value" id="totalTokens">0</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Total Rotations</div>
+          <div class="stat-value" id="rotationCount">0</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Total Trades</div>
+          <div class="stat-value" id="totalTrades">0</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h3>⏱️ Reconnect Performance</h3>
+      <div class="timing-box">
+        <div class="timing-label">Best Reconnect</div>
+        <div class="timing-value" id="bestReconnect">-</div>
+      </div>
+      <div class="timing-box">
+        <div class="timing-label">Worst Reconnect</div>
+        <div class="timing-value" id="worstReconnect">-</div>
+      </div>
+      <div class="timing-box">
+        <div class="timing-label">Average Reconnect</div>
+        <div class="timing-value" id="avgReconnect">-</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h3>📊 Trade Resume Latency</h3>
+      <div class="timing-box">
+        <div class="timing-label">Best Resume</div>
+        <div class="timing-value" id="bestResume">-</div>
+      </div>
+      <div class="timing-box">
+        <div class="timing-label">Worst Resume</div>
+        <div class="timing-value" id="worstResume">-</div>
+      </div>
+      <div class="timing-box">
+        <div class="timing-label">Average Resume</div>
+        <div class="timing-value" id="avgResume">-</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h3>📋 Live Log</h3>
+      <div class="log" id="log"></div>
+    </div>
+
+    <div class="section hidden" id="reportSection">
+      <h3>📈 Final Report</h3>
+      <div class="report" id="report"></div>
+    </div>
+  </div>
+
+  <script>
+    let selectedMode = 'SINGLE';
+    let pollInterval;
+
+    function selectMode(mode) {
+      selectedMode = mode;
+      ['SINGLE', 'DUAL', 'TRIPLE'].forEach(m => {
+        document.getElementById(m.toLowerCase() + 'Btn').classList.remove('selected');
+      });
+      document.getElementById(mode.toLowerCase() + 'Btn').classList.add('selected');
+      document.getElementById('mode').textContent = mode;
+    }
+
+    async function startTest() {
+      document.getElementById('startBtn').disabled = true;
+      document.getElementById('stopBtn').disabled = false;
+      try {
+        await fetch(\`/api/test/start/\${selectedMode}\`, { method: 'POST' });
+      } catch (e) {
+        alert('Error: ' + e.message);
+      }
+      pollInterval = setInterval(updateStatus, 1000);
+    }
+
+    async function stopTest() {
+      clearInterval(pollInterval);
+      try {
+        await fetch('/api/test/stop', { method: 'POST' });
+      } catch (e) {
+        console.error('Error:', e);
+      }
+      document.getElementById('startBtn').disabled = false;
+      document.getElementById('stopBtn').disabled = true;
+    }
+
+    async function updateStatus() {
+      try {
+        const res = await fetch('/api/test/status');
+        const status = await res.json();
+
+        document.getElementById('subscriptions').textContent = status.subscriptionsCount;
+        document.getElementById('capacityLimit').textContent = status.capacityLimit;
+        document.getElementById('totalTokens').textContent = status.totalTokens;
+        document.getElementById('rotationCount').textContent = status.rotationCount;
+        document.getElementById('totalTrades').textContent = status.totalTrades;
+
+        document.getElementById('bestReconnect').textContent = status.reconnectStats.best > 0 ? status.reconnectStats.best + 'ms' : '-';
+        document.getElementById('worstReconnect').textContent = status.reconnectStats.worst > 0 ? status.reconnectStats.worst + 'ms' : '-';
+        document.getElementById('avgReconnect').textContent = status.reconnectStats.avg > 0 ? status.reconnectStats.avg + 'ms' : '-';
+
+        document.getElementById('bestResume').textContent = status.tradeResumeStats.best > 0 ? status.tradeResumeStats.best + 'ms' : '-';
+        document.getElementById('worstResume').textContent = status.tradeResumeStats.worst > 0 ? status.tradeResumeStats.worst + 'ms' : '-';
+        document.getElementById('avgResume').textContent = status.tradeResumeStats.avg > 0 ? status.tradeResumeStats.avg + 'ms' : '-';
+
+        const logEl = document.getElementById('log');
+        logEl.innerHTML = status.logs.slice(-20).map((log) => {
+          const match = log.match(/\[(INFO|WARN|ERROR)\]/);
+          const level = match ? match[1] : 'INFO';
+          return \`<div class="log-entry \${level}">\${log}</div>\`;
+        }).join('');
+        logEl.scrollTop = logEl.scrollHeight;
+
+        if (!status.isRunning && pollInterval) {
+          clearInterval(pollInterval);
+          document.getElementById('startBtn').disabled = false;
+          document.getElementById('stopBtn').disabled = true;
+          document.getElementById('reportBtn').disabled = false;
+        }
+      } catch (e) {
+        console.error('Error updating:', e);
+      }
+    }
+
+    async function showReport() {
+      try {
+        const res = await fetch('/api/test/report');
+        const data = await res.json();
+        document.getElementById('report').textContent = data.report;
+        document.getElementById('reportSection').classList.remove('hidden');
+      } catch (e) {
+        alert('Error: ' + e.message);
+      }
+    }
+
+    selectMode('SINGLE');
+  </script>
+</body>
+</html></div>
+    </div>
+  </div>
+
+  <script>
+    function copyToClipboard(elementId) {
+      const element = document.getElementById(elementId);
+      const text = element.textContent;
+      navigator.clipboard.writeText(text).then(() => {
+        alert('✓ Copied!');
+      }).catch(err => {
+        console.error('Failed:', err);
+        alert('Failed to copy');
+      });
+    }
+  </script>
+</body>
+</html>

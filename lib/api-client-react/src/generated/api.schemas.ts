@@ -8,3 +8,66 @@
 export interface HealthStatus {
   status: string;
 }
+
+export interface ApiError {
+  error: string;
+}
+
+export interface OkResponse {
+  status: string;
+}
+
+export interface TestStarted {
+  status: string;
+  mode: string;
+}
+
+export interface TestStopped {
+  status: string;
+}
+
+export interface LatencyStats {
+  best: number;
+  worst: number;
+  avg: number;
+  count: number;
+}
+
+export interface TestStatus {
+  isRunning: boolean;
+  mode: string | null;
+  totalTokens: number;
+  totalTrades: number;
+  subscriptionsCount: number;
+  capacityLimit: number;
+  rotationCount: number;
+  connectedProviders: string[];
+  reconnectStats: LatencyStats;
+  tradeResumeStats: LatencyStats;
+  logs: string[];
+}
+
+export interface TestReport {
+  report: string;
+}
+
+export interface TokenRecord {
+  mint: string;
+  provider1: string;
+  provider2?: string | null;
+}
+
+export interface RegisterProxyRequest {
+  provider: string;
+}
+
+export interface ProxyReconnectedRequest {
+  provider: string;
+  resetTime: number;
+}
+
+export interface RecordTradeRequest {
+  mint: string;
+  provider: string;
+  signature: string;
+}

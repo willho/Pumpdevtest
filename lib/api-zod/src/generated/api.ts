@@ -8,9 +8,113 @@
 import * as zod from "zod";
 
 /**
- * Returns server health status
  * @summary Health check
  */
 export const HealthCheckResponse = zod.object({
+  status: zod.string(),
+});
+
+/**
+ * @summary Start the stress test
+ */
+export const StartTestParams = zod.object({
+  mode: zod.enum(["SINGLE", "DUAL", "TRIPLE"]),
+});
+
+export const StartTestResponse = zod.object({
+  status: zod.string(),
+  mode: zod.string(),
+});
+
+/**
+ * @summary Stop the stress test
+ */
+export const StopTestResponse = zod.object({
+  status: zod.string(),
+});
+
+/**
+ * @summary Get current test status
+ */
+export const GetTestStatusResponse = zod.object({
+  isRunning: zod.boolean(),
+  mode: zod.string().nullable(),
+  totalTokens: zod.number(),
+  totalTrades: zod.number(),
+  subscriptionsCount: zod.number(),
+  capacityLimit: zod.number(),
+  rotationCount: zod.number(),
+  connectedProviders: zod.array(zod.string()),
+  reconnectStats: zod.object({
+    best: zod.number(),
+    worst: zod.number(),
+    avg: zod.number(),
+    count: zod.number(),
+  }),
+  tradeResumeStats: zod.object({
+    best: zod.number(),
+    worst: zod.number(),
+    avg: zod.number(),
+    count: zod.number(),
+  }),
+  logs: zod.array(zod.string()),
+});
+
+/**
+ * @summary Get final test report
+ */
+export const GetTestReportResponse = zod.object({
+  report: zod.string(),
+});
+
+/**
+ * @summary Get tokens assigned to a provider
+ */
+export const GetTokensByProviderParams = zod.object({
+  provider: zod.coerce.string(),
+});
+
+export const GetTokensByProviderResponseItem = zod.object({
+  mint: zod.string(),
+  provider1: zod.string(),
+  provider2: zod.string().nullish(),
+});
+export const GetTokensByProviderResponse = zod.array(
+  GetTokensByProviderResponseItem,
+);
+
+/**
+ * @summary Register a proxy provider connection
+ */
+export const RegisterProxyBody = zod.object({
+  provider: zod.string(),
+});
+
+export const RegisterProxyResponse = zod.object({
+  status: zod.string(),
+});
+
+/**
+ * @summary Notify that a proxy provider has reconnected
+ */
+export const NotifyProxyReconnectedBody = zod.object({
+  provider: zod.string(),
+  resetTime: zod.number(),
+});
+
+export const NotifyProxyReconnectedResponse = zod.object({
+  status: zod.string(),
+});
+
+/**
+ * @summary Record a trade from a proxy provider
+ */
+export const RecordTradeBody = zod.object({
+  mint: zod.string(),
+  provider: zod.string(),
+  signature: zod.string(),
+});
+
+export const RecordTradeResponse = zod.object({
   status: zod.string(),
 });
