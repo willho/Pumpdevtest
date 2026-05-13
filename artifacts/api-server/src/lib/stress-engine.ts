@@ -215,18 +215,24 @@ export async function detectStalls() {
       .from(tradesTable)
       .where(gt(tradesTable.receivedAt, windowStart));
 
+    // Track which providers received at least one trade in the window
+    const activeProviders = new Set<string>();
     for (const trade of tradeRows) {
+      activeProviders.add(trade.provider);
       if (missingProviders[trade.mint]) {
         missingProviders[trade.mint].delete(trade.provider);
       }
     }
 
+    // A provider is stalled only if it received ZERO trades across ALL its tokens
+    // in the detection window — not just because individual tokens were quiet
     const newStalled = new Set<string>();
-    for (const [mint, missing] of Object.entries(missingProviders)) {
-      for (const provider of missing) {
-        if (expectedProviders[mint].includes(provider)) {
-          newStalled.add(provider);
-        }
+    for (const provider of providers) {
+      const hasTokens = tokenRows.some(
+        (t) => t.provider1 === provider || t.provider2 === provider
+      );
+      if (hasTokens && !activeProviders.has(provider)) {
+        newStalled.add(provider);
       }
     }
 
