@@ -1,18 +1,20 @@
 import WebSocket from "ws";
 import { db } from "@workspace/db";
-import {
-  tokensTable,
-  tradesTable,
-  resetsTable,
-} from "@workspace/db/schema";
-import { sql, eq, and, isNull, inArray, gt } from "drizzle-orm";
+import { tokensTable, tradesTable, resetsTable } from "@workspace/db/schema";
+import { sql, eq, and, isNull } from "drizzle-orm";
 import {
   state,
   log,
+  sendToProxy,
   CAPACITY_LIMITS,
+  PER_PROVIDER_LIMIT,
   DETECTION_WINDOW,
   RESET_COOLDOWN,
 } from "./stress-state.js";
+
+// ---------------------------------------------------------------------------
+// Trade resume latency
+// ---------------------------------------------------------------------------
 
 export async function checkTradeResumeCompletion(
   provider: string,
@@ -37,26 +39,21 @@ export async function checkTradeResumeCompletion(
 
       await db
         .update(resetsTable)
-        .set({
-          firstTradeAfterAt: tradeTime,
-          tradeResumeLatencyMs: resumeLatency,
-        })
+        .set({ firstTradeAfterAt: tradeTime, tradeResumeLatencyMs: resumeLatency })
         .where(eq(resetsTable.id, reset.id));
 
       state.tradeResumeStats.all.push(resumeLatency);
-      state.tradeResumeStats.best = Math.min(
-        state.tradeResumeStats.best,
-        resumeLatency
-      );
-      state.tradeResumeStats.worst = Math.max(
-        state.tradeResumeStats.worst,
-        resumeLatency
-      );
+      state.tradeResumeStats.best = Math.min(state.tradeResumeStats.best, resumeLatency);
+      state.tradeResumeStats.worst = Math.max(state.tradeResumeStats.worst, resumeLatency);
     }
   } catch (e: unknown) {
     log(`Resume check error: ${(e as Error).message}`, "error");
   }
 }
+
+// ---------------------------------------------------------------------------
+// Test provider (coordinator's own PumpDev connection)
+// ---------------------------------------------------------------------------
 
 export function connectTestPumpDev() {
   const wsUrl = "wss://pumpdev.io/ws";
@@ -65,6 +62,7 @@ export function connectTestPumpDev() {
   try {
     ws = new WebSocket(wsUrl);
     state.testConnection = ws;
+    state.testLastTradeAt = Date.now();
 
     ws.on("open", () => {
       log("[test] Connected to PumpDev");
@@ -77,6 +75,8 @@ export function connectTestPumpDev() {
 
         state.totalTrades++;
         const now = Date.now();
+        state.testLastTradeAt = now;
+        state.testIsStalled = false;
 
         await db.insert(tradesTable).values({
           mint: data.mint,
@@ -96,170 +96,144 @@ export function connectTestPumpDev() {
     });
 
     ws.on("close", () => {
-      log("[test] Connection closed - reconnecting in 2s", "warn");
-      setTimeout(() => connectTestPumpDev(), 2000);
+      log("[test] Connection closed — reconnecting in 2s", "warn");
+      if (state.isRunning) setTimeout(() => connectTestPumpDev(), 2000);
     });
   } catch (e: unknown) {
     log(`[test] Failed to connect: ${(e as Error).message}`, "error");
   }
 }
 
-async function subscribeTokens(mints: string[]) {
-  const ws = state.testConnection;
-  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+// ---------------------------------------------------------------------------
+// Subscription routing
+// ---------------------------------------------------------------------------
+
+function providerSubscribe(target: string, mints: string[]): boolean {
   if (mints.length === 0) return false;
 
-  try {
-    ws.send(
-      JSON.stringify({ method: "subscribeTokenTrade", keys: mints })
-    );
-
-    const now = Date.now();
-    await db
-      .update(tokensTable)
-      .set({ subscribedAt: now })
-      .where(inArray(tokensTable.mint, mints));
-
-    state.subscriptionsCount += mints.length;
+  if (target === "test") {
+    const ws = state.testConnection;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    ws.send(JSON.stringify({ method: "subscribeTokenTrade", keys: mints }));
+    for (const m of mints) state.testSubscriptions.add(m);
     return true;
-  } catch (e: unknown) {
-    log(`Failed to subscribe: ${(e as Error).message}`, "error");
-    return false;
   }
+
+  const proxy = state.proxies.get(target);
+  if (!proxy) return false;
+  const sent = sendToProxy(target, { type: "subscribe", tokens: mints });
+  if (sent) for (const m of mints) proxy.subscriptions.add(m);
+  return sent;
 }
 
-async function unsubscribeToken(mint: string) {
-  const ws = state.testConnection;
-  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
-
-  try {
-    ws.send(
-      JSON.stringify({ method: "unsubscribeTokenTrade", keys: [mint] })
-    );
-
-    const now = Date.now();
-    await db
-      .update(tokensTable)
-      .set({ unsubscribedAt: now })
-      .where(eq(tokensTable.mint, mint));
-
-    state.subscriptionsCount--;
-    state.rotationCount++;
+function providerUnsubscribe(target: string, mint: string): boolean {
+  if (target === "test") {
+    const ws = state.testConnection;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    ws.send(JSON.stringify({ method: "unsubscribeTokenTrade", keys: [mint] }));
+    state.testSubscriptions.delete(mint);
     return true;
-  } catch (e: unknown) {
-    log(`Failed to unsubscribe: ${(e as Error).message}`, "error");
-    return false;
   }
+
+  const proxy = state.proxies.get(target);
+  if (!proxy) return false;
+  const sent = sendToProxy(target, { type: "unsubscribe", tokens: [mint] });
+  if (sent) proxy.subscriptions.delete(mint);
+  return sent;
 }
 
-export async function handleTokenAtCapacity(mint: string, provider: string) {
-  const limit = CAPACITY_LIMITS[state.mode!];
+function providerSubCount(target: string): number {
+  if (target === "test") return state.testSubscriptions.size;
+  return state.proxies.get(target)?.subscriptions.size ?? 0;
+}
 
-  if (state.subscriptionsCount >= limit) {
-    const result = await db
-      .select({ mint: tokensTable.mint })
-      .from(tokensTable)
-      .where(
-        and(
-          eq(tokensTable.provider1, provider),
-          sql`${tokensTable.subscribedAt} IS NOT NULL`,
-          isNull(tokensTable.unsubscribedAt)
-        )
-      )
-      .orderBy(tokensTable.subscribedAt)
-      .limit(1);
+function refreshTotalSubCount() {
+  state.subscriptionsCount =
+    state.testSubscriptions.size +
+    Array.from(state.proxies.values()).reduce(
+      (sum, p) => sum + p.subscriptions.size,
+      0
+    );
+}
 
-    if (result.length > 0) {
-      const oldestMint = result[0].mint;
-      await unsubscribeToken(oldestMint);
-      await subscribeTokens([mint]);
+// ---------------------------------------------------------------------------
+// Capacity & rotation
+// ---------------------------------------------------------------------------
+
+async function handleAtCapacity(mint: string, target: string) {
+  if (providerSubCount(target) >= PER_PROVIDER_LIMIT) {
+    // Evict oldest subscription (insertion-ordered Set)
+    const oldest =
+      target === "test"
+        ? state.testSubscriptions.values().next().value
+        : state.proxies.get(target)?.subscriptions.values().next().value;
+
+    if (oldest) {
+      providerUnsubscribe(target, oldest);
+      await db
+        .update(tokensTable)
+        .set({ unsubscribedAt: Date.now() })
+        .where(eq(tokensTable.mint, oldest));
+      state.rotationCount++;
       log(
-        `Rotation: unsubscribed ${oldestMint.slice(0, 8)}..., subscribed ${mint.slice(0, 8)}...`
+        `Rotation [${target.slice(0, 8)}]: dropped ${oldest.slice(0, 8)}..., adding ${mint.slice(0, 8)}...`
       );
-      return;
     }
   }
 
-  await subscribeTokens([mint]);
+  providerSubscribe(target, [mint]);
+  await db
+    .update(tokensTable)
+    .set({ subscribedAt: Date.now() })
+    .where(eq(tokensTable.mint, mint));
+
+  refreshTotalSubCount();
 }
+
+// ---------------------------------------------------------------------------
+// Stall detection
+// ---------------------------------------------------------------------------
 
 export async function detectStalls() {
   if (!state.isRunning || !state.mode) return;
 
-  try {
-    const now = Date.now();
-    const windowStart = now - DETECTION_WINDOW;
-    const providers = Array.from(state.connectedProviders);
+  const now = Date.now();
 
-    const tokenRows = await db
-      .select()
-      .from(tokensTable)
-      .where(inArray(tokensTable.provider1, providers))
-      .limit(1000);
-
-    const expectedProviders: Record<string, string[]> = {};
-    const missingProviders: Record<string, Set<string>> = {};
-
-    for (const token of tokenRows) {
-      const ps: string[] = [];
-      if (state.connectedProviders.has(token.provider1))
-        ps.push(token.provider1);
-      if (token.provider2 && state.connectedProviders.has(token.provider2))
-        ps.push(token.provider2);
-      expectedProviders[token.mint] = ps;
-      missingProviders[token.mint] = new Set(ps);
-    }
-
-    const tradeRows = await db
-      .select({ mint: tradesTable.mint, provider: tradesTable.provider })
-      .from(tradesTable)
-      .where(gt(tradesTable.receivedAt, windowStart));
-
-    // Track which providers received at least one trade in the window
-    const activeProviders = new Set<string>();
-    for (const trade of tradeRows) {
-      activeProviders.add(trade.provider);
-      if (missingProviders[trade.mint]) {
-        missingProviders[trade.mint].delete(trade.provider);
+  // Test provider
+  if (state.testSubscriptions.size > 0) {
+    if (now - state.testLastTradeAt > DETECTION_WINDOW) {
+      if (now - state.testLastResetAt > RESET_COOLDOWN) {
+        state.testIsStalled = true;
+        state.testLastResetAt = now;
+        await db.insert(resetsTable).values({ provider: "test", resetTriggeredAt: now });
+        log("[test] Stalled — resetting connection", "warn");
+        state.testConnection?.close();
       }
+    } else {
+      state.testIsStalled = false;
     }
+  }
 
-    // A provider is stalled only if it received ZERO trades across ALL its tokens
-    // in the detection window — not just because individual tokens were quiet
-    const newStalled = new Set<string>();
-    for (const provider of providers) {
-      const hasTokens = tokenRows.some(
-        (t) => t.provider1 === provider || t.provider2 === provider
-      );
-      if (hasTokens && !activeProviders.has(provider)) {
-        newStalled.add(provider);
+  // Proxy providers
+  for (const [proxyId, proxy] of state.proxies) {
+    if (proxy.subscriptions.size === 0) continue;
+    if (now - proxy.lastTradeAt > DETECTION_WINDOW) {
+      if (now - proxy.lastResetAt > RESET_COOLDOWN) {
+        proxy.isStalled = true;
+        proxy.lastResetAt = now;
+        await db.insert(resetsTable).values({ provider: proxyId, resetTriggeredAt: now });
+        log(`[${proxy.name}] Stalled — sending reset`, "warn");
+        sendToProxy(proxyId, { type: "reset" });
       }
+    } else {
+      proxy.isStalled = false;
     }
-
-    for (const provider of newStalled) {
-      const timeSinceLastReset = now - (state.resetTimestamps[provider] ?? 0);
-      if (timeSinceLastReset > RESET_COOLDOWN) {
-        state.resetTimestamps[provider] = now;
-
-        await db.insert(resetsTable).values({
-          provider,
-          resetTriggeredAt: now,
-        });
-
-        if (provider === "test") {
-          log(`[test] Connection stalled - resetting`, "warn");
-          state.testConnection?.close();
-        } else {
-          log(`Resetting ${provider}`, "warn");
-        }
-      }
-    }
-
-    state.stalledProviders = newStalled;
-  } catch (e: unknown) {
-    log(`Detection error: ${(e as Error).message}`, "error");
   }
 }
+
+// ---------------------------------------------------------------------------
+// Start / stop
+// ---------------------------------------------------------------------------
 
 export async function startTest(mode: "SINGLE" | "DUAL" | "TRIPLE") {
   if (state.isRunning) return;
@@ -269,15 +243,24 @@ export async function startTest(mode: "SINGLE" | "DUAL" | "TRIPLE") {
   state.logs = [];
   state.subscriptionsCount = 0;
   state.rotationCount = 0;
-  state.stalledProviders.clear();
-  state.resetTimestamps = { test: 0, proxy2: 0, proxy3: 0 };
   state.reconnectStats = { best: Infinity, worst: 0, all: [] };
   state.tradeResumeStats = { best: Infinity, worst: 0, all: [] };
   state.totalTokens = 0;
   state.totalTrades = 0;
+  state.testSubscriptions = new Set();
+  state.testLastTradeAt = Date.now();
+  state.testIsStalled = false;
+  state.testLastResetAt = 0;
+
+  for (const proxy of state.proxies.values()) {
+    proxy.subscriptions = new Set();
+    proxy.isStalled = false;
+    proxy.lastResetAt = 0;
+    proxy.lastTradeAt = Date.now();
+  }
 
   const limit = CAPACITY_LIMITS[mode];
-  log(`TEST STARTED (Mode: ${mode}, Limit: ${limit} tokens)`);
+  log(`TEST STARTED (Mode: ${mode}, Limit: ${limit} tokens, Proxies: ${state.proxies.size})`);
 
   await db.execute(sql`TRUNCATE tokens, trades, resets`);
 
@@ -285,7 +268,6 @@ export async function startTest(mode: "SINGLE" | "DUAL" | "TRIPLE") {
   await new Promise((resolve) => setTimeout(resolve, 1000));
 
   const detectionInterval = setInterval(() => detectStalls(), 1000);
-
   let tokenIndex = 0;
 
   const pumpPortalWs = new WebSocket("wss://pumpportal.fun/api/data");
@@ -308,18 +290,24 @@ export async function startTest(mode: "SINGLE" | "DUAL" | "TRIPLE") {
       tokenIndex++;
       state.totalTokens = tokenIndex;
 
+      // Build ordered provider list: "test" always index 0
+      const allProviders = ["test", ...Array.from(state.proxies.keys())];
+
       let provider1: string;
       let provider2: string | null = null;
 
       if (mode === "SINGLE") {
         provider1 = "test";
       } else if (mode === "DUAL") {
-        const connected = Array.from(state.connectedProviders);
-        provider1 = connected[tokenIndex % connected.length];
-        provider2 = connected[(tokenIndex + 1) % connected.length];
+        const pool = allProviders.slice(0, 2);
+        provider1 = pool[tokenIndex % pool.length];
+        provider2 = pool[(tokenIndex + 1) % pool.length];
       } else {
-        provider1 = ["test", "proxy2", "proxy3"][tokenIndex % 3];
-        provider2 = ["test", "proxy2", "proxy3"][(tokenIndex + 1) % 3];
+        // TRIPLE: each token → 2 of 3 providers, round-robin
+        // Each provider carries 2/3 of tokens (4950 subs each → 7425 unique tokens)
+        const pool = allProviders.slice(0, 3);
+        provider1 = pool[tokenIndex % pool.length];
+        provider2 = pool[(tokenIndex + 1) % pool.length];
       }
 
       await db.insert(tokensTable).values({
@@ -329,16 +317,17 @@ export async function startTest(mode: "SINGLE" | "DUAL" | "TRIPLE") {
         assignedAt: Date.now(),
       });
 
-      if (provider1 === "test" || provider2 === "test") {
-        await handleTokenAtCapacity(data.mint, "test");
+      await handleAtCapacity(data.mint, provider1);
+      if (provider2 && provider2 !== provider1) {
+        await handleAtCapacity(data.mint, provider2);
       }
 
       log(
-        `Token ${tokenIndex}: ${data.mint.slice(0, 8)}... → ${provider1}${provider2 ? ", " + provider2 : ""}`
+        `Token ${tokenIndex}: ${data.mint.slice(0, 8)}... → ${provider1.slice(0, 8)}${provider2 ? ", " + provider2.slice(0, 8) : ""}`
       );
 
-      if (state.subscriptionsCount >= limit) {
-        log(`Reached capacity limit (${state.subscriptionsCount}/${limit})`);
+      if (state.totalTokens >= limit) {
+        log(`Reached capacity limit (${state.totalTokens}/${limit} unique tokens)`);
         setTimeout(() => {
           state.isRunning = false;
           clearInterval(detectionInterval);
@@ -369,5 +358,8 @@ export async function startTest(mode: "SINGLE" | "DUAL" | "TRIPLE") {
 export function stopTest() {
   state.isRunning = false;
   if (state.testConnection) state.testConnection.close();
+  for (const proxyId of state.proxies.keys()) {
+    sendToProxy(proxyId, { type: "reset" });
+  }
   log("TEST STOPPED", "warn");
 }

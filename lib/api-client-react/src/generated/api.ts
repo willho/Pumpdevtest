@@ -20,9 +20,6 @@ import type {
   ApiError,
   HealthStatus,
   OkResponse,
-  ProxyReconnectedRequest,
-  RecordTradeRequest,
-  RegisterProxyRequest,
   TestReport,
   TestStarted,
   TestStatus,
@@ -31,7 +28,7 @@ import type {
 } from "./api.schemas";
 
 import { customFetch } from "../custom-fetch";
-import type { ErrorType, BodyType } from "../custom-fetch";
+import type { ErrorType } from "../custom-fetch";
 
 type AwaitedInput<T> = PromiseLike<T> | T;
 
@@ -428,6 +425,85 @@ export function useGetTestReport<
 }
 
 /**
+ * @summary Truncate all test data tables
+ */
+export const getResetDbUrl = () => {
+  return `/api/test/reset-db`;
+};
+
+export const resetDb = async (options?: RequestInit): Promise<OkResponse> => {
+  return customFetch<OkResponse>(getResetDbUrl(), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getResetDbMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof resetDb>>,
+    TError,
+    void,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof resetDb>>,
+  TError,
+  void,
+  TContext
+> => {
+  const mutationKey = ["resetDb"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof resetDb>>,
+    void
+  > = () => {
+    return resetDb(requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ResetDbMutationResult = NonNullable<
+  Awaited<ReturnType<typeof resetDb>>
+>;
+
+export type ResetDbMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Truncate all test data tables
+ */
+export const useResetDb = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof resetDb>>,
+    TError,
+    void,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof resetDb>>,
+  TError,
+  void,
+  TContext
+> => {
+  return useMutation(getResetDbMutationOptions(options));
+};
+
+/**
  * @summary Get tokens assigned to a provider
  */
 export const getGetTokensByProviderUrl = (provider: string) => {
@@ -515,262 +591,3 @@ export function useGetTokensByProvider<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
-
-/**
- * @summary Register a proxy provider connection
- */
-export const getRegisterProxyUrl = () => {
-  return `/api/proxy/register`;
-};
-
-export const registerProxy = async (
-  registerProxyRequest: RegisterProxyRequest,
-  options?: RequestInit,
-): Promise<OkResponse> => {
-  return customFetch<OkResponse>(getRegisterProxyUrl(), {
-    ...options,
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...options?.headers },
-    body: JSON.stringify(registerProxyRequest),
-  });
-};
-
-export const getRegisterProxyMutationOptions = <
-  TError = ErrorType<unknown>,
-  TContext = unknown,
->(options?: {
-  mutation?: UseMutationOptions<
-    Awaited<ReturnType<typeof registerProxy>>,
-    TError,
-    { data: BodyType<RegisterProxyRequest> },
-    TContext
-  >;
-  request?: SecondParameter<typeof customFetch>;
-}): UseMutationOptions<
-  Awaited<ReturnType<typeof registerProxy>>,
-  TError,
-  { data: BodyType<RegisterProxyRequest> },
-  TContext
-> => {
-  const mutationKey = ["registerProxy"];
-  const { mutation: mutationOptions, request: requestOptions } = options
-    ? options.mutation &&
-      "mutationKey" in options.mutation &&
-      options.mutation.mutationKey
-      ? options
-      : { ...options, mutation: { ...options.mutation, mutationKey } }
-    : { mutation: { mutationKey }, request: undefined };
-
-  const mutationFn: MutationFunction<
-    Awaited<ReturnType<typeof registerProxy>>,
-    { data: BodyType<RegisterProxyRequest> }
-  > = (props) => {
-    const { data } = props ?? {};
-
-    return registerProxy(data, requestOptions);
-  };
-
-  return { mutationFn, ...mutationOptions };
-};
-
-export type RegisterProxyMutationResult = NonNullable<
-  Awaited<ReturnType<typeof registerProxy>>
->;
-export type RegisterProxyMutationBody = BodyType<RegisterProxyRequest>;
-export type RegisterProxyMutationError = ErrorType<unknown>;
-
-/**
- * @summary Register a proxy provider connection
- */
-export const useRegisterProxy = <
-  TError = ErrorType<unknown>,
-  TContext = unknown,
->(options?: {
-  mutation?: UseMutationOptions<
-    Awaited<ReturnType<typeof registerProxy>>,
-    TError,
-    { data: BodyType<RegisterProxyRequest> },
-    TContext
-  >;
-  request?: SecondParameter<typeof customFetch>;
-}): UseMutationResult<
-  Awaited<ReturnType<typeof registerProxy>>,
-  TError,
-  { data: BodyType<RegisterProxyRequest> },
-  TContext
-> => {
-  return useMutation(getRegisterProxyMutationOptions(options));
-};
-
-/**
- * @summary Notify that a proxy provider has reconnected
- */
-export const getNotifyProxyReconnectedUrl = () => {
-  return `/api/proxy/reconnected`;
-};
-
-export const notifyProxyReconnected = async (
-  proxyReconnectedRequest: ProxyReconnectedRequest,
-  options?: RequestInit,
-): Promise<OkResponse> => {
-  return customFetch<OkResponse>(getNotifyProxyReconnectedUrl(), {
-    ...options,
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...options?.headers },
-    body: JSON.stringify(proxyReconnectedRequest),
-  });
-};
-
-export const getNotifyProxyReconnectedMutationOptions = <
-  TError = ErrorType<unknown>,
-  TContext = unknown,
->(options?: {
-  mutation?: UseMutationOptions<
-    Awaited<ReturnType<typeof notifyProxyReconnected>>,
-    TError,
-    { data: BodyType<ProxyReconnectedRequest> },
-    TContext
-  >;
-  request?: SecondParameter<typeof customFetch>;
-}): UseMutationOptions<
-  Awaited<ReturnType<typeof notifyProxyReconnected>>,
-  TError,
-  { data: BodyType<ProxyReconnectedRequest> },
-  TContext
-> => {
-  const mutationKey = ["notifyProxyReconnected"];
-  const { mutation: mutationOptions, request: requestOptions } = options
-    ? options.mutation &&
-      "mutationKey" in options.mutation &&
-      options.mutation.mutationKey
-      ? options
-      : { ...options, mutation: { ...options.mutation, mutationKey } }
-    : { mutation: { mutationKey }, request: undefined };
-
-  const mutationFn: MutationFunction<
-    Awaited<ReturnType<typeof notifyProxyReconnected>>,
-    { data: BodyType<ProxyReconnectedRequest> }
-  > = (props) => {
-    const { data } = props ?? {};
-
-    return notifyProxyReconnected(data, requestOptions);
-  };
-
-  return { mutationFn, ...mutationOptions };
-};
-
-export type NotifyProxyReconnectedMutationResult = NonNullable<
-  Awaited<ReturnType<typeof notifyProxyReconnected>>
->;
-export type NotifyProxyReconnectedMutationBody =
-  BodyType<ProxyReconnectedRequest>;
-export type NotifyProxyReconnectedMutationError = ErrorType<unknown>;
-
-/**
- * @summary Notify that a proxy provider has reconnected
- */
-export const useNotifyProxyReconnected = <
-  TError = ErrorType<unknown>,
-  TContext = unknown,
->(options?: {
-  mutation?: UseMutationOptions<
-    Awaited<ReturnType<typeof notifyProxyReconnected>>,
-    TError,
-    { data: BodyType<ProxyReconnectedRequest> },
-    TContext
-  >;
-  request?: SecondParameter<typeof customFetch>;
-}): UseMutationResult<
-  Awaited<ReturnType<typeof notifyProxyReconnected>>,
-  TError,
-  { data: BodyType<ProxyReconnectedRequest> },
-  TContext
-> => {
-  return useMutation(getNotifyProxyReconnectedMutationOptions(options));
-};
-
-/**
- * @summary Record a trade from a proxy provider
- */
-export const getRecordTradeUrl = () => {
-  return `/api/trades`;
-};
-
-export const recordTrade = async (
-  recordTradeRequest: RecordTradeRequest,
-  options?: RequestInit,
-): Promise<OkResponse> => {
-  return customFetch<OkResponse>(getRecordTradeUrl(), {
-    ...options,
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...options?.headers },
-    body: JSON.stringify(recordTradeRequest),
-  });
-};
-
-export const getRecordTradeMutationOptions = <
-  TError = ErrorType<unknown>,
-  TContext = unknown,
->(options?: {
-  mutation?: UseMutationOptions<
-    Awaited<ReturnType<typeof recordTrade>>,
-    TError,
-    { data: BodyType<RecordTradeRequest> },
-    TContext
-  >;
-  request?: SecondParameter<typeof customFetch>;
-}): UseMutationOptions<
-  Awaited<ReturnType<typeof recordTrade>>,
-  TError,
-  { data: BodyType<RecordTradeRequest> },
-  TContext
-> => {
-  const mutationKey = ["recordTrade"];
-  const { mutation: mutationOptions, request: requestOptions } = options
-    ? options.mutation &&
-      "mutationKey" in options.mutation &&
-      options.mutation.mutationKey
-      ? options
-      : { ...options, mutation: { ...options.mutation, mutationKey } }
-    : { mutation: { mutationKey }, request: undefined };
-
-  const mutationFn: MutationFunction<
-    Awaited<ReturnType<typeof recordTrade>>,
-    { data: BodyType<RecordTradeRequest> }
-  > = (props) => {
-    const { data } = props ?? {};
-
-    return recordTrade(data, requestOptions);
-  };
-
-  return { mutationFn, ...mutationOptions };
-};
-
-export type RecordTradeMutationResult = NonNullable<
-  Awaited<ReturnType<typeof recordTrade>>
->;
-export type RecordTradeMutationBody = BodyType<RecordTradeRequest>;
-export type RecordTradeMutationError = ErrorType<unknown>;
-
-/**
- * @summary Record a trade from a proxy provider
- */
-export const useRecordTrade = <
-  TError = ErrorType<unknown>,
-  TContext = unknown,
->(options?: {
-  mutation?: UseMutationOptions<
-    Awaited<ReturnType<typeof recordTrade>>,
-    TError,
-    { data: BodyType<RecordTradeRequest> },
-    TContext
-  >;
-  request?: SecondParameter<typeof customFetch>;
-}): UseMutationResult<
-  Awaited<ReturnType<typeof recordTrade>>,
-  TError,
-  { data: BodyType<RecordTradeRequest> },
-  TContext
-> => {
-  return useMutation(getRecordTradeMutationOptions(options));
-};

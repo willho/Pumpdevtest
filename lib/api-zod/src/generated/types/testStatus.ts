@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { LatencyStats } from "./latencyStats";
+import type { ProxyStatus } from "./proxyStatus";
 
 export interface TestStatus {
   isRunning: boolean;
@@ -15,7 +16,7 @@ export interface TestStatus {
   subscriptionsCount: number;
   capacityLimit: number;
   rotationCount: number;
-  connectedProviders: string[];
+  proxies: ProxyStatus[];
   reconnectStats: LatencyStats;
   tradeResumeStats: LatencyStats;
   logs: string[];

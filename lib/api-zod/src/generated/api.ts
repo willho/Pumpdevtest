@@ -44,7 +44,18 @@ export const GetTestStatusResponse = zod.object({
   subscriptionsCount: zod.number(),
   capacityLimit: zod.number(),
   rotationCount: zod.number(),
-  connectedProviders: zod.array(zod.string()),
+  proxies: zod.array(
+    zod.object({
+      id: zod.string(),
+      name: zod.string(),
+      version: zod.string(),
+      capacity: zod.number(),
+      subscriptions: zod.number(),
+      isStalled: zod.boolean(),
+      lastTradeAt: zod.number(),
+      connectedAt: zod.number(),
+    }),
+  ),
   reconnectStats: zod.object({
     best: zod.number(),
     worst: zod.number(),
@@ -68,6 +79,13 @@ export const GetTestReportResponse = zod.object({
 });
 
 /**
+ * @summary Truncate all test data tables
+ */
+export const ResetDbResponse = zod.object({
+  status: zod.string(),
+});
+
+/**
  * @summary Get tokens assigned to a provider
  */
 export const GetTokensByProviderParams = zod.object({
@@ -82,39 +100,3 @@ export const GetTokensByProviderResponseItem = zod.object({
 export const GetTokensByProviderResponse = zod.array(
   GetTokensByProviderResponseItem,
 );
-
-/**
- * @summary Register a proxy provider connection
- */
-export const RegisterProxyBody = zod.object({
-  provider: zod.string(),
-});
-
-export const RegisterProxyResponse = zod.object({
-  status: zod.string(),
-});
-
-/**
- * @summary Notify that a proxy provider has reconnected
- */
-export const NotifyProxyReconnectedBody = zod.object({
-  provider: zod.string(),
-  resetTime: zod.number(),
-});
-
-export const NotifyProxyReconnectedResponse = zod.object({
-  status: zod.string(),
-});
-
-/**
- * @summary Record a trade from a proxy provider
- */
-export const RecordTradeBody = zod.object({
-  mint: zod.string(),
-  provider: zod.string(),
-  signature: zod.string(),
-});
-
-export const RecordTradeResponse = zod.object({
-  status: zod.string(),
-});

@@ -33,6 +33,17 @@ export interface LatencyStats {
   count: number;
 }
 
+export interface ProxyStatus {
+  id: string;
+  name: string;
+  version: string;
+  capacity: number;
+  subscriptions: number;
+  isStalled: boolean;
+  lastTradeAt: number;
+  connectedAt: number;
+}
+
 export interface TestStatus {
   isRunning: boolean;
   mode: string | null;
@@ -41,7 +52,7 @@ export interface TestStatus {
   subscriptionsCount: number;
   capacityLimit: number;
   rotationCount: number;
-  connectedProviders: string[];
+  proxies: ProxyStatus[];
   reconnectStats: LatencyStats;
   tradeResumeStats: LatencyStats;
   logs: string[];
@@ -55,19 +66,4 @@ export interface TokenRecord {
   mint: string;
   provider1: string;
   provider2?: string | null;
-}
-
-export interface RegisterProxyRequest {
-  provider: string;
-}
-
-export interface ProxyReconnectedRequest {
-  provider: string;
-  resetTime: number;
-}
-
-export interface RecordTradeRequest {
-  mint: string;
-  provider: string;
-  signature: string;
 }

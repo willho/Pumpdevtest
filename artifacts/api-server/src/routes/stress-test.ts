@@ -1,17 +1,9 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { tokensTable, tradesTable, resetsTable } from "@workspace/db/schema";
-import { eq, or } from "drizzle-orm";
-import {
-  state,
-  log,
-  CAPACITY_LIMITS,
-} from "../lib/stress-state.js";
-import {
-  startTest,
-  stopTest,
-  checkTradeResumeCompletion,
-} from "../lib/stress-engine.js";
+import { sql, eq, or } from "drizzle-orm";
+import { state, log, CAPACITY_LIMITS } from "../lib/stress-state.js";
+import { startTest, stopTest } from "../lib/stress-engine.js";
 
 const router = Router();
 
@@ -46,6 +38,17 @@ router.get("/test/status", (_req, res) => {
   const rs = state.reconnectStats;
   const ts = state.tradeResumeStats;
 
+  const proxies = Array.from(state.proxies.values()).map((p) => ({
+    id: p.id,
+    name: p.name,
+    version: p.version,
+    capacity: p.capacity,
+    subscriptions: p.subscriptions.size,
+    isStalled: p.isStalled,
+    lastTradeAt: p.lastTradeAt,
+    connectedAt: p.connectedAt,
+  }));
+
   res.json({
     isRunning: state.isRunning,
     mode: state.mode,
@@ -54,7 +57,7 @@ router.get("/test/status", (_req, res) => {
     subscriptionsCount: state.subscriptionsCount,
     capacityLimit: state.mode ? CAPACITY_LIMITS[state.mode] : 0,
     rotationCount: state.rotationCount,
-    connectedProviders: Array.from(state.connectedProviders),
+    proxies,
     reconnectStats: {
       best: rs.best === Infinity ? 0 : rs.best,
       worst: rs.worst,
@@ -96,18 +99,31 @@ router.get("/test/report", async (_req, res) => {
         ? Math.round(ts.all.reduce((a, b) => a + b, 0) / ts.all.length)
         : 0;
 
+    const proxyLines = Array.from(state.proxies.values())
+      .map(
+        (p) =>
+          `  ${p.name} (${p.id.slice(0, 8)}): ${p.subscriptions.size}/${p.capacity} subs`
+      )
+      .join("\n");
+
     const report = `
 ╔════════════════════════════════════════════════════════════════╗
-║         STRESS TEST WITH ROTATION: FINAL REPORT                ║
+║         STRESS TEST COORDINATOR: FINAL REPORT                  ║
 ╚════════════════════════════════════════════════════════════════╝
 
 TEST SUMMARY
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Mode:                     ${state.mode}
-Capacity Limit (99%):     ${state.mode ? CAPACITY_LIMITS[state.mode] : "N/A"}
+Capacity Limit:           ${state.mode ? CAPACITY_LIMITS[state.mode] : "N/A"} unique tokens
 Total Tokens Discovered:  ${tokensCount}
 Total Trades Captured:    ${tradesCount}
 Total Resets Triggered:   ${resetsCount}
+Connected Proxies:        ${state.proxies.size}
+
+PROVIDER BREAKDOWN
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  test (coordinator):     ${state.testSubscriptions.size}/4950 subs
+${proxyLines || "  (no external proxies)"}
 
 ROTATION PERFORMANCE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -132,11 +148,25 @@ CONCLUSIONS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Capacity limit held:      ${state.subscriptionsCount <= (state.mode ? CAPACITY_LIMITS[state.mode] : 0) ? "YES" : "NO"}
 Rotations handled:        ${state.rotationCount} tokens cycled
-Reset resilience:         ${rs.all.length} resets with avg ${rsAvg}ms reconnect
+Reset resilience:         ${ts.all.length} resets with avg ${tsAvg}ms trade resume
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
 
     res.json({ report });
+  } catch (e: unknown) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+router.post("/test/reset-db", async (_req, res) => {
+  if (state.isRunning) {
+    res.status(409).json({ error: "Cannot reset while test is running" });
+    return;
+  }
+  try {
+    await db.execute(sql`TRUNCATE tokens, trades, resets`);
+    log("DB reset by user");
+    res.json({ status: "ok" });
   } catch (e: unknown) {
     res.status(500).json({ error: (e as Error).message });
   }
@@ -153,72 +183,14 @@ router.get("/tokens/:provider", async (req, res) => {
       })
       .from(tokensTable)
       .where(
-        or(eq(tokensTable.provider1, provider), eq(tokensTable.provider2, provider))
+        or(
+          eq(tokensTable.provider1, provider),
+          eq(tokensTable.provider2, provider)
+        )
       )
       .limit(200);
 
     res.json(rows);
-  } catch (e: unknown) {
-    res.status(500).json({ error: (e as Error).message });
-  }
-});
-
-router.post("/proxy/register", (req, res) => {
-  const { provider } = req.body as { provider: string };
-  state.connectedProviders.add(provider);
-  log(`[Register] ${provider} connected`);
-  res.json({ status: "registered" });
-});
-
-router.post("/proxy/reconnected", async (req, res) => {
-  const { provider, resetTime } = req.body as {
-    provider: string;
-    resetTime: number;
-  };
-  const now = Date.now();
-  const reconnectLatency = now - resetTime;
-
-  state.reconnectStats.all.push(reconnectLatency);
-  state.reconnectStats.best = Math.min(
-    state.reconnectStats.best,
-    reconnectLatency
-  );
-  state.reconnectStats.worst = Math.max(
-    state.reconnectStats.worst,
-    reconnectLatency
-  );
-
-  await db
-    .update(resetsTable)
-    .set({
-      reconnectAt: now,
-      reconnectLatencyMs: reconnectLatency,
-    })
-    .where(eq(resetsTable.resetTriggeredAt, resetTime));
-
-  log(`[${provider}] Reconnected in ${reconnectLatency}ms`);
-  res.json({ status: "ok" });
-});
-
-router.post("/trades", async (req, res) => {
-  try {
-    const { mint, provider, signature } = req.body as {
-      mint: string;
-      provider: string;
-      signature: string;
-    };
-    const now = Date.now();
-
-    await db.insert(tradesTable).values({
-      mint,
-      provider,
-      signature,
-      receivedAt: now,
-    });
-
-    state.totalTrades++;
-    await checkTradeResumeCompletion(provider, now);
-    res.json({ status: "ok" });
   } catch (e: unknown) {
     res.status(500).json({ error: (e as Error).message });
   }
