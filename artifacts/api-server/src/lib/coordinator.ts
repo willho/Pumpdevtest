@@ -10,7 +10,7 @@ export function startCoordinator(server: Server) {
   const wss = new WebSocketServer({ noServer: true });
 
   server.on("upgrade", (req, socket, head) => {
-    if (req.url === "/coordinator") {
+    if (req.url?.startsWith("/coordinator")) {
       wss.handleUpgrade(req, socket as import("stream").Duplex, head, (ws) => {
         wss.emit("connection", ws, req);
       });
