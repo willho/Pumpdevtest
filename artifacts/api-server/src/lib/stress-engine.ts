@@ -200,7 +200,7 @@ export async function detectStalls() {
   const now = Date.now();
 
   // Test provider
-  if (state.testSubscriptions.size > 0) {
+  if (state.testSubscriptions.size >= 10) {
     if (now - state.testLastTradeAt > DETECTION_WINDOW) {
       if (now - state.testLastResetAt > RESET_COOLDOWN) {
         state.testIsStalled = true;
@@ -216,7 +216,7 @@ export async function detectStalls() {
 
   // Proxy providers
   for (const [proxyId, proxy] of state.proxies) {
-    if (proxy.subscriptions.size === 0) continue;
+    if (proxy.subscriptions.size < 10) continue;
     if (now - proxy.lastTradeAt > DETECTION_WINDOW) {
       if (now - proxy.lastResetAt > RESET_COOLDOWN) {
         proxy.isStalled = true;
@@ -299,9 +299,8 @@ export async function startTest(mode: "SINGLE" | "DUAL" | "TRIPLE") {
       if (mode === "SINGLE") {
         provider1 = "test";
       } else if (mode === "DUAL") {
-        const pool = allProviders.slice(0, 2);
-        provider1 = pool[tokenIndex % pool.length];
-        provider2 = pool[(tokenIndex + 1) % pool.length];
+        provider1 = "test";
+        provider2 = allProviders[1] ?? null;
       } else {
         // TRIPLE: each token → 2 of 3 providers, round-robin
         // Each provider carries 2/3 of tokens (4950 subs each → 7425 unique tokens)
