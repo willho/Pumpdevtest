@@ -52,6 +52,9 @@ export interface TestStatus {
   subscriptionsCount: number;
   capacityLimit: number;
   rotationCount: number;
+  testIsStalled: boolean;
+  testSubscriptions: number;
+  simultaneousStall: boolean;
   proxies: ProxyStatus[];
   reconnectStats: LatencyStats;
   tradeResumeStats: LatencyStats;

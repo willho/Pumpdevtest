@@ -57,6 +57,9 @@ router.get("/test/status", (_req, res) => {
     subscriptionsCount: state.subscriptionsCount,
     capacityLimit: state.mode ? CAPACITY_LIMITS[state.mode] : 0,
     rotationCount: state.rotationCount,
+    testIsStalled: state.testIsStalled,
+    testSubscriptions: state.testSubscriptions.size,
+    simultaneousStall: state.simultaneousStall,
     proxies,
     reconnectStats: {
       best: rs.best === Infinity ? 0 : rs.best,

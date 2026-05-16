@@ -44,6 +44,9 @@ export const GetTestStatusResponse = zod.object({
   subscriptionsCount: zod.number(),
   capacityLimit: zod.number(),
   rotationCount: zod.number(),
+  testIsStalled: zod.boolean(),
+  testSubscriptions: zod.number(),
+  simultaneousStall: zod.boolean(),
   proxies: zod.array(
     zod.object({
       id: zod.string(),

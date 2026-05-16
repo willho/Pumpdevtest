@@ -198,6 +198,7 @@ export async function detectStalls() {
   if (!state.isRunning || !state.mode) return;
 
   const now = Date.now();
+  let stalledCount = 0;
 
   // Test provider
   if (state.testSubscriptions.size >= 10) {
@@ -205,10 +206,12 @@ export async function detectStalls() {
       if (now - state.testLastResetAt > RESET_COOLDOWN) {
         state.testIsStalled = true;
         state.testLastResetAt = now;
+        const silentMs = Math.round((now - state.testLastTradeAt) / 1000);
         await db.insert(resetsTable).values({ provider: "test", resetTriggeredAt: now });
-        log("[test] Stalled — resetting connection", "warn");
+        log(`[test] STALL — ${silentMs}s silent — resetting connection`, "warn");
         state.testConnection?.close();
       }
+      stalledCount++;
     } else {
       state.testIsStalled = false;
     }
@@ -221,13 +224,22 @@ export async function detectStalls() {
       if (now - proxy.lastResetAt > RESET_COOLDOWN) {
         proxy.isStalled = true;
         proxy.lastResetAt = now;
+        const silentMs = Math.round((now - proxy.lastTradeAt) / 1000);
         await db.insert(resetsTable).values({ provider: proxyId, resetTriggeredAt: now });
-        log(`[${proxy.name}] Stalled — sending reset`, "warn");
+        log(`[${proxy.name}] STALL — ${silentMs}s silent — sending reset`, "warn");
         sendToProxy(proxyId, { type: "reset" });
       }
+      stalledCount++;
     } else {
       proxy.isStalled = false;
     }
+  }
+
+  // Simultaneous stall detection
+  const wasSimultaneous = state.simultaneousStall;
+  state.simultaneousStall = stalledCount >= 2;
+  if (state.simultaneousStall && !wasSimultaneous) {
+    log(`!! SIMULTANEOUS STALL — ${stalledCount} providers stalled at once`, "error");
   }
 }
 

@@ -95,8 +95,12 @@ export default function Dashboard() {
     if (log.includes("INFO")) colorClass = "text-primary";
     if (log.includes("WARN")) colorClass = "text-accent";
     if (log.includes("ERROR")) colorClass = "text-destructive font-bold";
+    const isSimultaneous = log.includes("SIMULTANEOUS STALL");
     return (
-      <div key={i} className={`text-xs font-mono mb-1 ${colorClass}`}>
+      <div
+        key={i}
+        className={`text-xs font-mono mb-1 ${isSimultaneous ? "text-destructive font-bold bg-destructive/10 px-1 rounded" : colorClass}`}
+      >
         {log}
       </div>
     );
@@ -198,6 +202,16 @@ export default function Dashboard() {
           </Card>
         </section>
 
+        {/* SIMULTANEOUS STALL BANNER */}
+        {statusData?.simultaneousStall && (
+          <div className="flex items-center gap-3 border border-destructive/70 bg-destructive/10 rounded-md px-4 py-3 animate-pulse">
+            <AlertTriangle size={18} className="text-destructive shrink-0" />
+            <span className="font-mono text-sm text-destructive font-bold tracking-wider uppercase">
+              !! SIMULTANEOUS STALL — multiple providers silent
+            </span>
+          </div>
+        )}
+
         {/* METRICS GRID */}
         <section className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
           <StatBox label="SUBSCRIPTIONS" value={statusData?.subscriptionsCount ?? 0} icon={Activity} />
@@ -256,18 +270,22 @@ export default function Dashboard() {
                       <div className="flex items-center justify-between">
                         <span className="font-mono text-xs text-primary font-semibold">test</span>
                         <div className="flex items-center gap-1.5">
-                          {statusData?.isRunning && (
-                            <span className="text-[10px] font-mono text-muted-foreground">
-                              built-in
+                          {statusData?.testIsStalled ? (
+                            <span className="text-[10px] font-mono text-destructive flex items-center gap-0.5">
+                              <AlertTriangle size={11} /> STALL
                             </span>
+                          ) : (
+                            <>
+                              <span className="text-[10px] font-mono text-muted-foreground">built-in</span>
+                              <CheckCircle2 size={13} className="text-primary" />
+                            </>
                           )}
-                          <CheckCircle2 size={13} className="text-primary" />
                         </div>
                       </div>
                       <FillBar
-                        value={statusData?.subscriptionsCount ?? 0}
+                        value={statusData?.testSubscriptions ?? statusData?.subscriptionsCount ?? 0}
                         max={4950}
-                        stalled={false}
+                        stalled={statusData?.testIsStalled ?? false}
                       />
                     </div>
                   )}

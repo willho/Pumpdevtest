@@ -223,6 +223,12 @@ components:
           type: number
         rotationCount:
           type: number
+        testIsStalled:
+          type: boolean
+        testSubscriptions:
+          type: number
+        simultaneousStall:
+          type: boolean
         proxies:
           type: array
           items:
@@ -243,6 +249,9 @@ components:
         - subscriptionsCount
         - capacityLimit
         - rotationCount
+        - testIsStalled
+        - testSubscriptions
+        - simultaneousStall
         - proxies
         - reconnectStats
         - tradeResumeStats

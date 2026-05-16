@@ -32,6 +32,7 @@ export interface StressState {
   totalTrades: number;
   subscriptionsCount: number;
   rotationCount: number;
+  simultaneousStall: boolean;
   reconnectStats: LatencyStats;
   tradeResumeStats: LatencyStats;
   logs: string[];
@@ -51,6 +52,7 @@ export const state: StressState = {
   totalTrades: 0,
   subscriptionsCount: 0,
   rotationCount: 0,
+  simultaneousStall: false,
   reconnectStats: { best: Infinity, worst: 0, all: [] },
   tradeResumeStats: { best: Infinity, worst: 0, all: [] },
   logs: [],
