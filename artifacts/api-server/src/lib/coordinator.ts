@@ -32,6 +32,12 @@ export function startCoordinator(server: Server) {
           const version = String(msg["version"] ?? "0.0.0");
           const capacity = Number(msg["capacity"] ?? 4950);
 
+          const proxyIndex = state.proxies.size;
+          const totalProxies = state.proxies.size + 1;
+          const pumpportalPingOffsetMin = Math.floor(
+            (proxyIndex * 30) / totalProxies
+          );
+
           state.proxies.set(proxyId, {
             id: proxyId,
             name,
@@ -42,12 +48,21 @@ export function startCoordinator(server: Server) {
             connectedAt: Date.now(),
             isStalled: false,
             lastResetAt: 0,
+            pumpPortalLastNewTokenAt: Date.now(),
+            pumpPortalIsStalled: false,
           });
           state.proxyWs.set(proxyId, ws);
+          state.proxyPumpPortalLastNewTokenAt.set(proxyId, Date.now());
 
-          ws.send(JSON.stringify({ type: "welcome", proxyId }));
+          ws.send(
+            JSON.stringify({
+              type: "welcome",
+              proxyId,
+              pumpportalPingOffsetMin,
+            })
+          );
           log(
-            `[coordinator] Proxy joined: ${name} v${version} capacity=${capacity} id=${proxyId.slice(0, 8)}`
+            `[coordinator] Proxy joined: ${name} v${version} capacity=${capacity} id=${proxyId.slice(0, 8)} pumpportal_offset=${pumpportalPingOffsetMin}min`
           );
           return;
         }
@@ -76,6 +91,25 @@ export function startCoordinator(server: Server) {
           });
 
           await checkTradeResumeCompletion(proxyId, now);
+        }
+
+        if (msg["type"] === "discovered_token") {
+          const mint = String(msg["mint"] ?? "");
+          if (!mint) return;
+
+          const now = Date.now();
+          proxy.pumpPortalLastNewTokenAt = now;
+          proxy.pumpPortalIsStalled = false;
+          state.proxyPumpPortalLastNewTokenAt.set(proxyId, now);
+
+          if (state.seenMints.has(mint)) {
+            return;
+          }
+
+          state.seenMints.add(mint);
+          log(
+            `[coordinator] New token (proxy): ${mint.slice(0, 8)}... from ${proxy.name}`
+          );
         }
       } catch (e: unknown) {
         log(`[coordinator] Message error: ${(e as Error).message}`, "error");

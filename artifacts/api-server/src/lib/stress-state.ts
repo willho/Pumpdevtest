@@ -16,6 +16,8 @@ export interface ProxyInfo {
   connectedAt: number;
   isStalled: boolean;
   lastResetAt: number;
+  pumpPortalLastNewTokenAt: number;
+  pumpPortalIsStalled: boolean;
 }
 
 export interface StressState {
@@ -36,6 +38,12 @@ export interface StressState {
   reconnectStats: LatencyStats;
   tradeResumeStats: LatencyStats;
   logs: string[];
+  coordinatorLastNewTokenAt: number;
+  proxyPumpPortalLastNewTokenAt: Map<string, number>;
+  seenMints: Set<string>;
+  pumpPortalPingInterval?: NodeJS.Timeout;
+  simultaneousPumpPortalStall: boolean;
+  wasPumpPortalSimultaneouslyStalled: boolean;
 }
 
 export const state: StressState = {
@@ -56,6 +64,11 @@ export const state: StressState = {
   reconnectStats: { best: Infinity, worst: 0, all: [] },
   tradeResumeStats: { best: Infinity, worst: 0, all: [] },
   logs: [],
+  coordinatorLastNewTokenAt: 0,
+  proxyPumpPortalLastNewTokenAt: new Map(),
+  seenMints: new Set(),
+  simultaneousPumpPortalStall: false,
+  wasPumpPortalSimultaneouslyStalled: false,
 };
 
 export const CAPACITY_LIMITS: Record<string, number> = {
@@ -68,6 +81,7 @@ export const PER_PROVIDER_LIMIT = 4950;
 export const DETECTION_WINDOW = 5000;
 export const CHECK_INTERVAL = 1000;
 export const RESET_COOLDOWN = 30000;
+export const PUMPPORTAL_STALL_THRESHOLD = 30000;
 
 export function sendToProxy(
   proxyId: string,
