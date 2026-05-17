@@ -54,6 +54,8 @@ router.get("/test/status", (_req, res) => {
     mode: state.mode,
     totalTokens: state.totalTokens,
     totalTrades: state.totalTrades,
+    uniqueWalletsCount: state.uniqueWallets.size,
+    testStartAt: state.testStartAt,
     subscriptionsCount: state.subscriptionsCount,
     capacityLimit: state.mode ? CAPACITY_LIMITS[state.mode] : 0,
     rotationCount: state.rotationCount,

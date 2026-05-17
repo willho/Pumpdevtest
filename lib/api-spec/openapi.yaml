@@ -217,6 +217,10 @@ components:
           type: number
         totalTrades:
           type: number
+        uniqueWalletsCount:
+          type: number
+        testStartAt:
+          type: number
         subscriptionsCount:
           type: number
         capacityLimit:
@@ -246,6 +250,8 @@ components:
         - mode
         - totalTokens
         - totalTrades
+        - uniqueWalletsCount
+        - testStartAt
         - subscriptionsCount
         - capacityLimit
         - rotationCount

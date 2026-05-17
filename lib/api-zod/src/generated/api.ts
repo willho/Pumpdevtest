@@ -41,6 +41,8 @@ export const GetTestStatusResponse = zod.object({
   mode: zod.string().nullable(),
   totalTokens: zod.number(),
   totalTrades: zod.number(),
+  uniqueWalletsCount: zod.number(),
+  testStartAt: zod.number(),
   subscriptionsCount: zod.number(),
   capacityLimit: zod.number(),
   rotationCount: zod.number(),

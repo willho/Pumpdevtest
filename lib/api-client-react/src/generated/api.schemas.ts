@@ -49,6 +49,8 @@ export interface TestStatus {
   mode: string | null;
   totalTokens: number;
   totalTrades: number;
+  uniqueWalletsCount: number;
+  testStartAt: number;
   subscriptionsCount: number;
   capacityLimit: number;
   rotationCount: number;

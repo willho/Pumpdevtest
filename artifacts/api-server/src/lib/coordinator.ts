@@ -75,6 +75,7 @@ export function startCoordinator(server: Server) {
           const mint = String(msg["mint"] ?? "");
           const signature = String(msg["signature"] ?? "");
           const receivedAt = Number(msg["receivedAt"] ?? Date.now());
+          const wallet = msg["wallet"] ? String(msg["wallet"]) : null;
 
           if (!mint || !signature) return;
 
@@ -83,10 +84,13 @@ export function startCoordinator(server: Server) {
           proxy.isStalled = false;
           state.totalTrades++;
 
+          if (wallet) state.uniqueWallets.add(wallet);
+
           await db.insert(tradesTable).values({
             mint,
             provider: proxyId,
             signature,
+            wallet,
             receivedAt,
           });
 

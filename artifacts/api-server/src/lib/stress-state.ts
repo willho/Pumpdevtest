@@ -44,6 +44,8 @@ export interface StressState {
   pumpPortalPingInterval?: NodeJS.Timeout;
   simultaneousPumpPortalStall: boolean;
   wasPumpPortalSimultaneouslyStalled: boolean;
+  uniqueWallets: Set<string>;
+  testStartAt: number;
 }
 
 export const state: StressState = {
@@ -69,6 +71,8 @@ export const state: StressState = {
   seenMints: new Set(),
   simultaneousPumpPortalStall: false,
   wasPumpPortalSimultaneouslyStalled: false,
+  uniqueWallets: new Set(),
+  testStartAt: 0,
 };
 
 export const CAPACITY_LIMITS: Record<string, number> = {

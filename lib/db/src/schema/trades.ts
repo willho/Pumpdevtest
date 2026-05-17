@@ -5,6 +5,7 @@ export const tradesTable = pgTable("trades", {
   mint: varchar("mint", { length: 255 }).notNull(),
   provider: varchar("provider", { length: 50 }).notNull(),
   signature: varchar("signature", { length: 255 }).notNull(),
+  wallet: varchar("wallet", { length: 255 }),
   receivedAt: bigint("received_at", { mode: "number" }).notNull(),
   createdAt: timestamp("created_at").defaultNow(),
 });

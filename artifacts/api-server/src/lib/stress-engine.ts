@@ -190,10 +190,14 @@ export function connectTestPumpDev() {
         state.testLastTradeAt = now;
         state.testIsStalled = false;
 
+        const wallet: string | undefined = data.traderPublicKey ?? data.buyer ?? undefined;
+        if (wallet) state.uniqueWallets.add(wallet);
+
         await db.insert(tradesTable).values({
           mint: data.mint,
           provider: "test",
           signature: data.signature,
+          wallet: wallet ?? null,
           receivedAt: now,
         });
 
@@ -411,6 +415,12 @@ export async function detectStalls() {
     state.wasPumpPortalSimultaneouslyStalled = false;
   }
   state.simultaneousPumpPortalStall = nowSimultaneouslyStalled;
+
+  // 24-hour time limit
+  if (state.testStartAt > 0 && now - state.testStartAt >= 24 * 60 * 60 * 1000) {
+    log("24-hour time limit reached — stopping test", "warn");
+    stopTest();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -437,6 +447,8 @@ export async function startTest(mode: "SINGLE" | "DUAL" | "TRIPLE") {
   state.seenMints = new Set();
   state.simultaneousPumpPortalStall = false;
   state.wasPumpPortalSimultaneouslyStalled = false;
+  state.uniqueWallets = new Set();
+  state.testStartAt = Date.now();
 
   for (const proxy of state.proxies.values()) {
     proxy.subscriptions = new Set();

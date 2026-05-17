@@ -109,6 +109,15 @@ export default function Dashboard() {
   const proxies = statusData?.proxies ?? [];
   const providerCount = 1 + proxies.length; // test + connected proxies
 
+  const elapsedLabel = (() => {
+    if (!statusData?.testStartAt || statusData.testStartAt === 0) return "—";
+    const secs = Math.floor((Date.now() - statusData.testStartAt) / 1000);
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    const s = secs % 60;
+    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  })();
+
   return (
     <div className="min-h-screen bg-background text-foreground p-6 selection:bg-primary/30">
       <div className="max-w-7xl mx-auto space-y-6">
@@ -213,7 +222,7 @@ export default function Dashboard() {
         )}
 
         {/* METRICS GRID */}
-        <section className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+        <section className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4">
           <StatBox label="SUBSCRIPTIONS" value={statusData?.subscriptionsCount ?? 0} icon={Activity} />
           <StatBox label="CAPACITY_LMT" value={statusData?.capacityLimit ?? 0} icon={Database} />
           <StatBox label="TOTAL_TOKENS" value={statusData?.totalTokens ?? 0} icon={Server} />
@@ -224,7 +233,9 @@ export default function Dashboard() {
             highlight={!!(statusData?.rotationCount && statusData.rotationCount > 0)}
           />
           <StatBox label="TRADES" value={statusData?.totalTrades ?? 0} icon={Activity} />
+          <StatBox label="WALLETS" value={statusData?.uniqueWalletsCount ?? 0} icon={Activity} />
           <StatBox label="PROVIDERS" value={isRunning ? providerCount : proxies.length} icon={Server} />
+          <StatBox label="ELAPSED" value={elapsedLabel} icon={Activity} />
         </section>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
