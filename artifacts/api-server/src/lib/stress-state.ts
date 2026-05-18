@@ -46,6 +46,10 @@ export interface StressState {
   wasPumpPortalSimultaneouslyStalled: boolean;
   uniqueWallets: Set<string>;
   testStartAt: number;
+  totalMigrations: number;
+  totalRotations: number;
+  migrationProviderLastEventAt: Map<string, number>;
+  migrationProvidersStalled: Set<string>;
 }
 
 export const state: StressState = {
@@ -73,6 +77,10 @@ export const state: StressState = {
   wasPumpPortalSimultaneouslyStalled: false,
   uniqueWallets: new Set(),
   testStartAt: 0,
+  totalMigrations: 0,
+  totalRotations: 0,
+  migrationProviderLastEventAt: new Map(),
+  migrationProvidersStalled: new Set(),
 };
 
 export const CAPACITY_LIMITS: Record<string, number> = {
@@ -86,6 +94,7 @@ export const DETECTION_WINDOW = 5000;
 export const CHECK_INTERVAL = 1000;
 export const RESET_COOLDOWN = 30000;
 export const PUMPPORTAL_STALL_THRESHOLD = 30000;
+export const MIGRATION_STALL_THRESHOLD = 30000;
 
 export function sendToProxy(
   proxyId: string,

@@ -1,6 +1,6 @@
 import WebSocket from "ws";
 import { db } from "@workspace/db";
-import { tokensTable, tradesTable, resetsTable } from "@workspace/db/schema";
+import { tokensTable, tradesTable, resetsTable, migrationsTable, rotationsTable } from "@workspace/db/schema";
 import { sql, eq, and, isNull } from "drizzle-orm";
 import {
   state,
@@ -12,6 +12,8 @@ import {
   RESET_COOLDOWN,
   PUMPPORTAL_STALL_THRESHOLD,
 } from "./stress-state.js";
+import { startMigrationDetection, stopMigrationDetection } from "./migration-engine.js";
+import { checkMigrationProviderStall } from "./coordinator.js";
 
 // ---------------------------------------------------------------------------
 // Trade resume latency
@@ -416,6 +418,11 @@ export async function detectStalls() {
   }
   state.simultaneousPumpPortalStall = nowSimultaneouslyStalled;
 
+  // Migration stream stall detection (TRIPLE mode only)
+  if (state.mode === "TRIPLE") {
+    checkMigrationProviderStall();
+  }
+
   // 24-hour time limit
   if (state.testStartAt > 0 && now - state.testStartAt >= 24 * 60 * 60 * 1000) {
     log("24-hour time limit reached — stopping test", "warn");
@@ -449,6 +456,10 @@ export async function startTest(mode: "SINGLE" | "DUAL" | "TRIPLE") {
   state.wasPumpPortalSimultaneouslyStalled = false;
   state.uniqueWallets = new Set();
   state.testStartAt = Date.now();
+  state.totalMigrations = 0;
+  state.totalRotations = 0;
+  state.migrationProviderLastEventAt = new Map();
+  state.migrationProvidersStalled = new Set();
 
   for (const proxy of state.proxies.values()) {
     proxy.subscriptions = new Set();
@@ -462,10 +473,30 @@ export async function startTest(mode: "SINGLE" | "DUAL" | "TRIPLE") {
   const limit = CAPACITY_LIMITS[mode];
   log(`TEST STARTED (Mode: ${mode}, Limit: ${limit} tokens, Proxies: ${state.proxies.size})`);
 
-  await db.execute(sql`TRUNCATE tokens, trades, resets`);
+  await db.execute(sql`TRUNCATE tokens, trades, resets, migrations, rotations`);
 
   connectTestPumpDev();
   connectPumpPortal();
+
+  if (mode === "TRIPLE") {
+    const urls: string[] = [];
+    if (process.env.CHAINSTACK_MIGRATION_URL) {
+      urls.push(process.env.CHAINSTACK_MIGRATION_URL);
+    }
+    if (process.env.CHAINSTACK_MIGRATION_URL_2) {
+      urls.push(process.env.CHAINSTACK_MIGRATION_URL_2);
+    }
+    if (urls.length > 0) {
+      const providers = urls.map((url, i) => ({
+        name: `coordinator-chainstack-${i + 1}`,
+        url,
+      }));
+      await startMigrationDetection(providers);
+    } else {
+      log("[migration] CHAINSTACK_MIGRATION_URL not set — skipping migration detection", "warn");
+    }
+  }
+
   await new Promise((resolve) => setTimeout(resolve, 1000));
 
   setInterval(() => detectStalls(), 1000);
@@ -481,5 +512,6 @@ export function stopTest() {
   for (const proxyId of state.proxies.keys()) {
     sendToProxy(proxyId, { type: "reset" });
   }
+  stopMigrationDetection().catch(() => {});
   log("TEST STOPPED", "warn");
 }

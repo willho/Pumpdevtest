@@ -2,8 +2,8 @@ import { WebSocketServer, WebSocket } from "ws";
 import type { Server } from "http";
 import { randomUUID } from "crypto";
 import { db } from "@workspace/db";
-import { tradesTable } from "@workspace/db/schema";
-import { state, log } from "./stress-state.js";
+import { tradesTable, migrationsTable } from "@workspace/db/schema";
+import { state, log, MIGRATION_STALL_THRESHOLD } from "./stress-state.js";
 import { checkTradeResumeCompletion } from "./stress-engine.js";
 
 export function startCoordinator(server: Server) {
@@ -37,6 +37,10 @@ export function startCoordinator(server: Server) {
           const pumpportalPingOffsetMin = Math.floor(
             (proxyIndex * 30) / totalProxies
           );
+          const migrationPingOffsetMin = Math.floor(
+            (proxyIndex * 30) / totalProxies
+          );
+          const migrationUrl = process.env.CHAINSTACK_MIGRATION_URL;
 
           state.proxies.set(proxyId, {
             id: proxyId,
@@ -53,12 +57,15 @@ export function startCoordinator(server: Server) {
           });
           state.proxyWs.set(proxyId, ws);
           state.proxyPumpPortalLastNewTokenAt.set(proxyId, Date.now());
+          state.migrationProviderLastEventAt.set(name, Date.now());
 
           ws.send(
             JSON.stringify({
               type: "welcome",
               proxyId,
               pumpportalPingOffsetMin,
+              migrationPingOffsetMin,
+              migrationUrl,
             })
           );
           log(
@@ -106,14 +113,42 @@ export function startCoordinator(server: Server) {
           proxy.pumpPortalIsStalled = false;
           state.proxyPumpPortalLastNewTokenAt.set(proxyId, now);
 
-          if (state.seenMints.has(mint)) {
-            return;
-          }
+          if (state.seenMints.has(mint)) return;
 
           state.seenMints.add(mint);
           log(
             `[coordinator] New token (proxy): ${mint.slice(0, 8)}... from ${proxy.name}`
           );
+        }
+
+        if (msg["type"] === "migration_detected") {
+          const mint = String(msg["mint"] ?? "");
+          const poolAddress = String(msg["poolAddress"] ?? "");
+          const signature = String(msg["signature"] ?? "");
+          const provider = String(msg["provider"] ?? "");
+          if (!mint || !poolAddress || !signature) return;
+
+          const now = Date.now();
+          state.migrationProviderLastEventAt.set(provider, now);
+          state.migrationProvidersStalled.delete(provider);
+          state.totalMigrations++;
+
+          if (!state.seenMints.has(mint)) {
+            state.seenMints.add(mint);
+            log(
+              `[coordinator] Migration detected: ${mint.slice(0, 8)}... (pool: ${poolAddress.slice(0, 8)}...)`
+            );
+          }
+
+          await db.insert(migrationsTable).values({
+            mint,
+            poolAddress,
+            signature,
+            provider,
+            detectedAt: now,
+            mintAmount: msg["mintAmount"] ? String(msg["mintAmount"]) : "0",
+            solAmount: msg["solAmount"] ? String(msg["solAmount"]) : "0",
+          });
         }
       } catch (e: unknown) {
         log(`[coordinator] Message error: ${(e as Error).message}`, "error");
@@ -142,4 +177,24 @@ export function startCoordinator(server: Server) {
   });
 
   log("[coordinator] Listening on /coordinator");
+}
+
+export function checkMigrationProviderStall(): void {
+  const now = Date.now();
+
+  for (const [provider, lastEventTime] of state.migrationProviderLastEventAt) {
+    const timeSilent = now - lastEventTime;
+
+    if (timeSilent > MIGRATION_STALL_THRESHOLD) {
+      if (!state.migrationProvidersStalled.has(provider)) {
+        state.migrationProvidersStalled.add(provider);
+        log(
+          `[stall-detector] Migration provider ${provider} stalled (${timeSilent}ms), needs reset`,
+          "warn"
+        );
+      }
+    } else {
+      state.migrationProvidersStalled.delete(provider);
+    }
+  }
 }
