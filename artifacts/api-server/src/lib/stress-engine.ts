@@ -93,21 +93,21 @@ function connectPumpPortal() {
 
         const now = Date.now();
 
-        // Migration event — has a pool address
-        if (data.pool) {
+        // Migration event — txType is "migrate"
+        if (data.txType === "migrate") {
           if (state.mode !== "TRIPLE") return;
           state.migrationProviderLastEventAt.set("pumpportal", now);
           state.migrationProvidersStalled.delete("pumpportal");
           state.totalMigrations++;
-          log(`[migration] Graduated: ${data.mint.slice(0, 8)}... (pool: ${String(data.pool).slice(0, 8)}...)`);
+          log(`[migration] Graduated: ${data.mint.slice(0, 8)}... sig: ${String(data.signature).slice(0, 8)}...`);
           await db.insert(migrationsTable).values({
             mint: data.mint,
-            poolAddress: String(data.pool),
+            poolAddress: "pump-amm",
             signature: data.signature ?? "",
             provider: "pumpportal",
             detectedAt: now,
-            mintAmount: data.vTokensInBondingCurve?.toString() ?? "0",
-            solAmount: data.vSolInBondingCurve?.toString() ?? "0",
+            mintAmount: "0",
+            solAmount: "0",
           }).onConflictDoNothing();
           return;
         }
