@@ -17,9 +17,15 @@ export interface OkResponse {
   status: string;
 }
 
+export interface TestStartOptions {
+  sourceNewToken?: boolean;
+  sourceMigration?: boolean;
+}
+
 export interface TestStarted {
   status: string;
-  mode: string;
+  sourceNewToken: boolean;
+  sourceMigration: boolean;
 }
 
 export interface TestStopped {
@@ -46,9 +52,11 @@ export interface ProxyStatus {
 
 export interface TestStatus {
   isRunning: boolean;
-  mode: string | null;
+  sourceNewToken: boolean;
+  sourceMigration: boolean;
   totalTokens: number;
   totalTrades: number;
+  totalMigrations: number;
   uniqueWalletsCount: number;
   testStartAt: number;
   subscriptionsCount: number;

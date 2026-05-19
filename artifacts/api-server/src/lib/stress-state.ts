@@ -22,7 +22,9 @@ export interface ProxyInfo {
 
 export interface StressState {
   isRunning: boolean;
-  mode: "SINGLE" | "DUAL" | "TRIPLE" | null;
+  mode: "RUNNING" | null;
+  sourceNewToken: boolean;
+  sourceMigration: boolean;
   testConnection: WebSocket | null;
   testSubscriptions: Set<string>;
   testLastTradeAt: number;
@@ -32,6 +34,8 @@ export interface StressState {
   proxyWs: Map<string, WebSocket>;
   totalTokens: number;
   totalTrades: number;
+  totalMigrations: number;
+  totalRotations: number;
   subscriptionsCount: number;
   rotationCount: number;
   simultaneousStall: boolean;
@@ -46,8 +50,6 @@ export interface StressState {
   wasPumpPortalSimultaneouslyStalled: boolean;
   uniqueWallets: Set<string>;
   testStartAt: number;
-  totalMigrations: number;
-  totalRotations: number;
   migrationProviderLastEventAt: Map<string, number>;
   migrationProvidersStalled: Set<string>;
 }
@@ -55,6 +57,8 @@ export interface StressState {
 export const state: StressState = {
   isRunning: false,
   mode: null,
+  sourceNewToken: true,
+  sourceMigration: false,
   testConnection: null,
   testSubscriptions: new Set(),
   testLastTradeAt: 0,
@@ -64,6 +68,8 @@ export const state: StressState = {
   proxyWs: new Map(),
   totalTokens: 0,
   totalTrades: 0,
+  totalMigrations: 0,
+  totalRotations: 0,
   subscriptionsCount: 0,
   rotationCount: 0,
   simultaneousStall: false,
@@ -77,16 +83,8 @@ export const state: StressState = {
   wasPumpPortalSimultaneouslyStalled: false,
   uniqueWallets: new Set(),
   testStartAt: 0,
-  totalMigrations: 0,
-  totalRotations: 0,
   migrationProviderLastEventAt: new Map(),
   migrationProvidersStalled: new Set(),
-};
-
-export const CAPACITY_LIMITS: Record<string, number> = {
-  SINGLE: 4950,
-  DUAL: 4950,
-  TRIPLE: 7425,
 };
 
 export const PER_PROVIDER_LIMIT = 4950;

@@ -6,7 +6,6 @@ import {
   state,
   log,
   sendToProxy,
-  CAPACITY_LIMITS,
   PER_PROVIDER_LIMIT,
   DETECTION_WINDOW,
   RESET_COOLDOWN,
@@ -57,25 +56,57 @@ export async function checkTradeResumeCompletion(
 }
 
 // ---------------------------------------------------------------------------
-// PumpPortal (New Token Discovery)
+// Mint assignment + subscription (shared by new-token and migration paths)
+// ---------------------------------------------------------------------------
+
+async function assignAndSubscribeMint(mint: string) {
+  if (state.seenMints.has(mint)) return;
+  state.seenMints.add(mint);
+
+  state.totalTokens++;
+  const tokenIndex = state.totalTokens;
+
+  const allProviders = ["test", ...Array.from(state.proxies.keys())];
+  const provider1 = allProviders[tokenIndex % allProviders.length];
+  const provider2raw = allProviders[(tokenIndex + 1) % allProviders.length];
+  const provider2 = provider2raw !== provider1 ? provider2raw : null;
+
+  await db.insert(tokensTable).values({
+    mint,
+    provider1,
+    provider2: provider2 ?? null,
+    assignedAt: Date.now(),
+  });
+
+  await handleAtCapacity(mint, provider1);
+  if (provider2) await handleAtCapacity(mint, provider2);
+
+  log(
+    `Token ${tokenIndex}: ${mint.slice(0, 8)}... → ${provider1.slice(0, 8)}${provider2 ? ", " + provider2.slice(0, 8) : ""}`
+  );
+
+  const limit = (1 + state.proxies.size) * PER_PROVIDER_LIMIT;
+  if (state.totalTokens >= limit) {
+    log(`Reached capacity limit (${state.totalTokens}/${limit} unique tokens)`);
+    state.isRunning = false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// PumpPortal (New Token Discovery + Migration Detection)
 // ---------------------------------------------------------------------------
 
 function connectPumpPortal() {
   const wsUrl = "wss://pumpportal.fun/api/data";
   let ws: WebSocket;
-  let tokenIndex = state.totalTokens;
 
   try {
     ws = new WebSocket(wsUrl);
 
     ws.on("open", () => {
-      log("[pumpportal] Connected to PumpPortal");
+      log("[pumpportal] Connected — subscribing to new tokens and migrations");
       ws.send(JSON.stringify({ method: "subscribeNewToken" }));
-
-      if (state.mode === "TRIPLE") {
-        ws.send(JSON.stringify({ method: "subscribeMigration" }));
-        log("[pumpportal] Subscribed to migration events");
-      }
+      ws.send(JSON.stringify({ method: "subscribeMigration" }));
 
       state.pumpPortalPingInterval = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
@@ -93,9 +124,8 @@ function connectPumpPortal() {
 
         const now = Date.now();
 
-        // Migration event — txType is "migrate"
+        // Migration event
         if (data.txType === "migrate") {
-          if (state.mode !== "TRIPLE") return;
           state.migrationProviderLastEventAt.set("pumpportal", now);
           state.migrationProvidersStalled.delete("pumpportal");
           state.totalMigrations++;
@@ -109,60 +139,20 @@ function connectPumpPortal() {
             mintAmount: "0",
             solAmount: "0",
           }).onConflictDoNothing();
+
+          if (state.sourceMigration) {
+            await assignAndSubscribeMint(data.mint);
+          }
           return;
         }
 
+        // New token event
         state.coordinatorLastNewTokenAt = now;
 
-        if (state.seenMints.has(data.mint)) {
-          return;
-        }
-
-        state.seenMints.add(data.mint);
-        tokenIndex++;
-        state.totalTokens = tokenIndex;
-
-        const mode = state.mode;
-        if (!mode) return;
-
-        const limit = CAPACITY_LIMITS[mode];
-        const allProviders = ["test", ...Array.from(state.proxies.keys())];
-
-        let provider1: string;
-        let provider2: string | null = null;
-
-        if (mode === "SINGLE") {
-          provider1 = "test";
-        } else if (mode === "DUAL") {
-          provider1 = "test";
-          provider2 = allProviders[1] ?? null;
+        if (state.sourceNewToken) {
+          await assignAndSubscribeMint(data.mint);
         } else {
-          const pool = allProviders.slice(0, 3);
-          provider1 = pool[tokenIndex % pool.length];
-          provider2 = pool[(tokenIndex + 1) % pool.length];
-        }
-
-        await db.insert(tokensTable).values({
-          mint: data.mint,
-          provider1,
-          provider2,
-          assignedAt: now,
-        });
-
-        await handleAtCapacity(data.mint, provider1);
-        if (provider2 && provider2 !== provider1) {
-          await handleAtCapacity(data.mint, provider2);
-        }
-
-        log(
-          `Token ${tokenIndex}: ${data.mint.slice(0, 8)}... → ${provider1.slice(0, 8)}${provider2 ? ", " + provider2.slice(0, 8) : ""}`
-        );
-
-        if (state.totalTokens >= limit) {
-          log(
-            `Reached capacity limit (${state.totalTokens}/${limit} unique tokens)`
-          );
-          state.isRunning = false;
+          state.seenMints.add(data.mint);
         }
       } catch (e: unknown) {
         log(`[pumpportal] Error: ${(e as Error).message}`, "error");
@@ -338,7 +328,7 @@ async function handleAtCapacity(mint: string, target: string) {
 // ---------------------------------------------------------------------------
 
 export async function detectStalls() {
-  if (!state.isRunning || !state.mode) return;
+  if (!state.isRunning) return;
 
   const now = Date.now();
   let stalledCount = 0;
@@ -392,7 +382,6 @@ export async function detectStalls() {
   ).length;
   const activeStreams = (coordinatorHasToken ? 1 : 0) + activeProxyStreams;
 
-  // Per-stream: coordinator PumpPortal stall
   if (!coordinatorHasToken && activeProxyStreams > 0) {
     log(
       `[pumpportal] Coordinator stalled (silent ${Math.round((now - state.coordinatorLastNewTokenAt) / 1000)}s), reconnecting`,
@@ -405,7 +394,6 @@ export async function detectStalls() {
     setTimeout(() => connectPumpPortal(), 0);
   }
 
-  // Per-stream: proxy PumpPortal stalls
   for (const [proxyId, proxy] of state.proxies) {
     if ((now - proxy.pumpPortalLastNewTokenAt) > PUMPPORTAL_STALL_THRESHOLD && activeProxyStreams < state.proxies.size) {
       log(
@@ -418,13 +406,9 @@ export async function detectStalls() {
     }
   }
 
-  // Simultaneous PumpPortal stall (CRITICAL — all streams dead)
   const nowSimultaneouslyStalled = activeStreams === 0;
   if (nowSimultaneouslyStalled && !state.wasPumpPortalSimultaneouslyStalled) {
-    log(
-      `[CRITICAL] ALL PumpPortal streams stalled — NO TOKEN DISCOVERY COVERAGE`,
-      "error"
-    );
+    log(`[CRITICAL] ALL PumpPortal streams stalled — NO TOKEN DISCOVERY COVERAGE`, "error");
     state.wasPumpPortalSimultaneouslyStalled = true;
     state.seenMints.clear();
     if (state.pumpPortalPingInterval) {
@@ -436,18 +420,13 @@ export async function detectStalls() {
       sendToProxy(proxyId, { type: "reset_pumpportal" });
     }
   } else if (!nowSimultaneouslyStalled && state.wasPumpPortalSimultaneouslyStalled) {
-    log(
-      `[pumpportal] Coverage restored (simultaneous stall cleared)`,
-      "warn"
-    );
+    log(`[pumpportal] Coverage restored (simultaneous stall cleared)`, "warn");
     state.wasPumpPortalSimultaneouslyStalled = false;
   }
   state.simultaneousPumpPortalStall = nowSimultaneouslyStalled;
 
-  // Migration stream stall detection (TRIPLE mode only)
-  if (state.mode === "TRIPLE") {
-    checkMigrationProviderStall();
-  }
+  // Migration stream stall detection
+  checkMigrationProviderStall();
 
   // 24-hour time limit
   if (state.testStartAt > 0 && now - state.testStartAt >= 24 * 60 * 60 * 1000) {
@@ -460,11 +439,13 @@ export async function detectStalls() {
 // Start / stop
 // ---------------------------------------------------------------------------
 
-export async function startTest(mode: "SINGLE" | "DUAL" | "TRIPLE") {
+export async function startTest(sourceNewToken: boolean, sourceMigration: boolean) {
   if (state.isRunning) return;
 
   state.isRunning = true;
-  state.mode = mode;
+  state.mode = "RUNNING";
+  state.sourceNewToken = sourceNewToken;
+  state.sourceMigration = sourceMigration;
   state.logs = [];
   state.subscriptionsCount = 0;
   state.rotationCount = 0;
@@ -484,8 +465,6 @@ export async function startTest(mode: "SINGLE" | "DUAL" | "TRIPLE") {
   state.wasPumpPortalSimultaneouslyStalled = false;
   state.uniqueWallets = new Set();
   state.testStartAt = Date.now();
-  state.totalMigrations = 0;
-  state.totalRotations = 0;
   state.migrationProviderLastEventAt = new Map();
   state.migrationProvidersStalled = new Set();
 
@@ -498,17 +477,15 @@ export async function startTest(mode: "SINGLE" | "DUAL" | "TRIPLE") {
     proxy.pumpPortalIsStalled = false;
   }
 
-  const limit = CAPACITY_LIMITS[mode];
-  log(`TEST STARTED (Mode: ${mode}, Limit: ${limit} tokens, Proxies: ${state.proxies.size})`);
+  const limit = (1 + state.proxies.size) * PER_PROVIDER_LIMIT;
+  const sources = [sourceNewToken ? "NEW_TOKEN" : null, sourceMigration ? "MIGRATION" : null]
+    .filter(Boolean).join("+") || "NONE";
+  log(`TEST STARTED (Sources: ${sources}, Limit: ${limit} tokens, Proxies: ${state.proxies.size})`);
 
   await db.execute(sql`TRUNCATE tokens, trades, resets, migrations, rotations`);
 
   connectTestPumpDev();
   connectPumpPortal();
-
-  if (mode === "TRIPLE") {
-    log("[migration] TRIPLE mode active — migration detection via PumpPortal subscribeMigration");
-  }
 
   await new Promise((resolve) => setTimeout(resolve, 1000));
 

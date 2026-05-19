@@ -114,17 +114,19 @@ export function useHealthCheck<
 /**
  * @summary Start the stress test
  */
-export const getStartTestUrl = (mode: "SINGLE" | "DUAL" | "TRIPLE") => {
-  return `/api/test/start/${mode}`;
+export const getStartTestUrl = () => {
+  return `/api/test/start`;
 };
 
 export const startTest = async (
-  mode: "SINGLE" | "DUAL" | "TRIPLE",
+  body: { sourceNewToken?: boolean; sourceMigration?: boolean },
   options?: RequestInit,
 ): Promise<TestStarted> => {
-  return customFetch<TestStarted>(getStartTestUrl(mode), {
+  return customFetch<TestStarted>(getStartTestUrl(), {
     ...options,
     method: "POST",
+    headers: { "Content-Type": "application/json", ...(options?.headers ?? {}) },
+    body: JSON.stringify(body),
   });
 };
 
@@ -135,14 +137,14 @@ export const getStartTestMutationOptions = <
   mutation?: UseMutationOptions<
     Awaited<ReturnType<typeof startTest>>,
     TError,
-    { mode: "SINGLE" | "DUAL" | "TRIPLE" },
+    { sourceNewToken?: boolean; sourceMigration?: boolean },
     TContext
   >;
   request?: SecondParameter<typeof customFetch>;
 }): UseMutationOptions<
   Awaited<ReturnType<typeof startTest>>,
   TError,
-  { mode: "SINGLE" | "DUAL" | "TRIPLE" },
+  { sourceNewToken?: boolean; sourceMigration?: boolean },
   TContext
 > => {
   const mutationKey = ["startTest"];
@@ -156,11 +158,9 @@ export const getStartTestMutationOptions = <
 
   const mutationFn: MutationFunction<
     Awaited<ReturnType<typeof startTest>>,
-    { mode: "SINGLE" | "DUAL" | "TRIPLE" }
+    { sourceNewToken?: boolean; sourceMigration?: boolean }
   > = (props) => {
-    const { mode } = props ?? {};
-
-    return startTest(mode, requestOptions);
+    return startTest(props ?? {}, requestOptions);
   };
 
   return { mutationFn, ...mutationOptions };
@@ -182,14 +182,14 @@ export const useStartTest = <
   mutation?: UseMutationOptions<
     Awaited<ReturnType<typeof startTest>>,
     TError,
-    { mode: "SINGLE" | "DUAL" | "TRIPLE" },
+    { sourceNewToken?: boolean; sourceMigration?: boolean },
     TContext
   >;
   request?: SecondParameter<typeof customFetch>;
 }): UseMutationResult<
   Awaited<ReturnType<typeof startTest>>,
   TError,
-  { mode: "SINGLE" | "DUAL" | "TRIPLE" },
+  { sourceNewToken?: boolean; sourceMigration?: boolean },
   TContext
 > => {
   return useMutation(getStartTestMutationOptions(options));

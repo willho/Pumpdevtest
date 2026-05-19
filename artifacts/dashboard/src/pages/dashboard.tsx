@@ -29,10 +29,9 @@ import {
   Trash2,
 } from "lucide-react";
 
-type Mode = "SINGLE" | "DUAL" | "TRIPLE";
-
 export default function Dashboard() {
-  const [selectedMode, setSelectedMode] = useState<Mode>("SINGLE");
+  const [sourceNewToken, setSourceNewToken] = useState(true);
+  const [sourceMigration, setSourceMigration] = useState(false);
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
 
   const { data: statusData, isLoading: isLoadingStatus } = useGetTestStatus({
@@ -76,7 +75,7 @@ export default function Dashboard() {
   const handleStart = () => {
     setShowReport(false);
     setSelectedProvider(null);
-    startTest.mutate({ mode: selectedMode });
+    startTest.mutate({ sourceNewToken, sourceMigration });
   };
 
   const handleStop = () => {
@@ -153,21 +152,24 @@ export default function Dashboard() {
           <Card className="flex-1 bg-card/50 border-border/50">
             <CardHeader className="py-4 border-b border-border/50">
               <CardTitle className="text-sm font-mono flex items-center gap-2 text-muted-foreground uppercase">
-                <Settings2 size={16} /> Operation Mode
+                <Settings2 size={16} /> Mint Sources
               </CardTitle>
             </CardHeader>
-            <CardContent className="py-4 flex gap-3">
-              {(["SINGLE", "DUAL", "TRIPLE"] as Mode[]).map((mode) => (
-                <Button
-                  key={mode}
-                  variant={selectedMode === mode ? "default" : "outline"}
-                  onClick={() => setSelectedMode(mode)}
-                  disabled={isRunning}
-                  className={`font-mono text-xs tracking-wider ${selectedMode === mode ? "shadow-[0_0_15px_rgba(34,197,94,0.3)]" : ""}`}
-                >
-                  {mode}_MODE
-                </Button>
-              ))}
+            <CardContent className="py-4 flex gap-4">
+              <SourceToggle
+                label="NEW_TOKEN"
+                description="subscribeNewToken"
+                active={sourceNewToken}
+                disabled={isRunning}
+                onChange={setSourceNewToken}
+              />
+              <SourceToggle
+                label="MIGRATION"
+                description="subscribeMigration"
+                active={sourceMigration}
+                disabled={isRunning}
+                onChange={setSourceMigration}
+              />
             </CardContent>
           </Card>
 
@@ -221,7 +223,7 @@ export default function Dashboard() {
         {/* METRICS GRID */}
         <section className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4">
           <StatBox label="SUBSCRIPTIONS" value={statusData?.subscriptionsCount ?? 0} icon={Activity} />
-          <StatBox label="CAPACITY_LMT" value={statusData?.capacityLimit ?? 0} icon={Database} />
+          <StatBox label="MIGRATIONS" value={statusData?.totalMigrations ?? 0} icon={Database} highlight={!!(statusData?.totalMigrations && statusData.totalMigrations > 0)} />
           <StatBox label="TOTAL_TOKENS" value={statusData?.totalTokens ?? 0} icon={Server} />
           <StatBox
             label="ROTATIONS"
@@ -494,6 +496,38 @@ function StatBox({
         )}
       </div>
     </Card>
+  );
+}
+
+function SourceToggle({
+  label,
+  description,
+  active,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  description: string;
+  active: boolean;
+  disabled: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <button
+      onClick={() => !disabled && onChange(!active)}
+      disabled={disabled}
+      className={`flex flex-col gap-1 px-4 py-2.5 rounded border font-mono transition-all ${
+        active
+          ? "border-primary bg-primary/10 text-primary shadow-[0_0_12px_rgba(34,197,94,0.25)]"
+          : "border-border/50 bg-transparent text-muted-foreground hover:border-border"
+      } ${disabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
+    >
+      <div className="flex items-center gap-2 text-xs tracking-wider uppercase">
+        <div className={`w-2 h-2 rounded-full ${active ? "bg-primary" : "bg-muted-foreground/40"}`} />
+        {label}
+      </div>
+      <span className="text-[10px] text-muted-foreground/70">{description}</span>
+    </button>
   );
 }
 

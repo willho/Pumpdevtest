@@ -2,31 +2,24 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import { tokensTable, tradesTable, resetsTable } from "@workspace/db/schema";
 import { sql, eq, or } from "drizzle-orm";
-import { state, log, CAPACITY_LIMITS } from "../lib/stress-state.js";
+import { state, log, PER_PROVIDER_LIMIT } from "../lib/stress-state.js";
 import { startTest, stopTest } from "../lib/stress-engine.js";
 
 const router = Router();
 
-router.post("/test/start/:mode", (req, res) => {
-  const mode = (req.params["mode"] ?? "").toUpperCase() as
-    | "SINGLE"
-    | "DUAL"
-    | "TRIPLE";
-
-  if (!["SINGLE", "DUAL", "TRIPLE"].includes(mode)) {
-    res.status(400).json({ error: "Invalid mode" });
-    return;
-  }
+router.post("/test/start", (req, res) => {
+  const sourceNewToken = req.body?.sourceNewToken !== false;
+  const sourceMigration = req.body?.sourceMigration === true;
 
   if (state.isRunning) {
     res.status(400).json({ error: "Already running" });
     return;
   }
 
-  startTest(mode).catch((e: Error) =>
+  startTest(sourceNewToken, sourceMigration).catch((e: Error) =>
     log(`Start error: ${e.message}`, "error")
   );
-  res.json({ status: "started", mode });
+  res.json({ status: "started", sourceNewToken, sourceMigration });
 });
 
 router.post("/test/stop", (_req, res) => {
@@ -49,15 +42,19 @@ router.get("/test/status", (_req, res) => {
     connectedAt: p.connectedAt,
   }));
 
+  const capacityLimit = (1 + state.proxies.size) * PER_PROVIDER_LIMIT;
+
   res.json({
     isRunning: state.isRunning,
-    mode: state.mode,
+    sourceNewToken: state.sourceNewToken,
+    sourceMigration: state.sourceMigration,
     totalTokens: state.totalTokens,
     totalTrades: state.totalTrades,
+    totalMigrations: state.totalMigrations,
     uniqueWalletsCount: state.uniqueWallets.size,
     testStartAt: state.testStartAt,
     subscriptionsCount: state.subscriptionsCount,
-    capacityLimit: state.mode ? CAPACITY_LIMITS[state.mode] : 0,
+    capacityLimit,
     rotationCount: state.rotationCount,
     testIsStalled: state.testIsStalled,
     testSubscriptions: state.testSubscriptions.size,
@@ -104,12 +101,19 @@ router.get("/test/report", async (_req, res) => {
         ? Math.round(ts.all.reduce((a, b) => a + b, 0) / ts.all.length)
         : 0;
 
+    const sources = [
+      state.sourceNewToken ? "NEW_TOKEN" : null,
+      state.sourceMigration ? "MIGRATION" : null,
+    ].filter(Boolean).join("+") || "NONE";
+
     const proxyLines = Array.from(state.proxies.values())
       .map(
         (p) =>
           `  ${p.name} (${p.id.slice(0, 8)}): ${p.subscriptions.size}/${p.capacity} subs`
       )
       .join("\n");
+
+    const capacityLimit = (1 + state.proxies.size) * PER_PROVIDER_LIMIT;
 
     const report = `
 ╔════════════════════════════════════════════════════════════════╗
@@ -118,11 +122,12 @@ router.get("/test/report", async (_req, res) => {
 
 TEST SUMMARY
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Mode:                     ${state.mode}
-Capacity Limit:           ${state.mode ? CAPACITY_LIMITS[state.mode] : "N/A"} unique tokens
+Mint Sources:             ${sources}
+Capacity Limit:           ${capacityLimit} unique tokens
 Total Tokens Discovered:  ${tokensCount}
 Total Trades Captured:    ${tradesCount}
 Total Resets Triggered:   ${resetsCount}
+Total Migrations:         ${state.totalMigrations}
 Connected Proxies:        ${state.proxies.size}
 
 PROVIDER BREAKDOWN
@@ -151,7 +156,7 @@ Resumptions Measured:     ${ts.all.length}
 
 CONCLUSIONS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Capacity limit held:      ${state.subscriptionsCount <= (state.mode ? CAPACITY_LIMITS[state.mode] : 0) ? "YES" : "NO"}
+Capacity limit held:      ${state.subscriptionsCount <= capacityLimit ? "YES" : "NO"}
 Rotations handled:        ${state.rotationCount} tokens cycled
 Reset resilience:         ${ts.all.length} resets with avg ${tsAvg}ms trade resume
 
