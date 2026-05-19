@@ -175,7 +175,7 @@ router.post("/test/reset-db", async (_req, res) => {
     return;
   }
   try {
-    await db.execute(sql`TRUNCATE tokens, trades, resets`);
+    await db.execute(sql`TRUNCATE tokens, trades, resets, migrations, rotations`);
     log("DB reset by user");
     res.json({ status: "ok" });
   } catch (e: unknown) {
