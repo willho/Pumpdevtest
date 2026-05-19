@@ -14,7 +14,6 @@ import { eq, sql } from "drizzle-orm";
 import { state, log, sendToProxy } from "./stress-state.js";
 
 const PUMP_FUN_PROGRAM = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
-const PUMP_SWAP_AMM_PROGRAM = "pAMMBay6oceH9fJKBjAn7yV6B8eSNTJVT3NnZvJbNQP";
 const STALL_THRESHOLD = 30000; // 30 seconds
 const ROTATION_CAPACITY = 4950; // Per provider
 
@@ -120,7 +119,7 @@ function connectProvider(provider: MigrationProvider, offsetMinutes: number) {
           method: "logsSubscribe",
           params: [
             {
-              mentions: [PUMP_FUN_PROGRAM, PUMP_SWAP_AMM_PROGRAM],
+              mentions: [PUMP_FUN_PROGRAM],
             },
             {
               commitment: "processed",

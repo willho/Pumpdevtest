@@ -13,7 +13,7 @@ import {
   PUMPPORTAL_STALL_THRESHOLD,
   MIGRATION_STALL_THRESHOLD,
 } from "./stress-state.js";
-import { startMigrationDetection, stopMigrationDetection } from "./migration-engine.js";
+import { stopMigrationDetection } from "./migration-engine.js";
 import { checkMigrationProviderStall, startDiscoveryStreams } from "./coordinator.js";
 
 // ---------------------------------------------------------------------------
@@ -72,6 +72,11 @@ function connectPumpPortal() {
       log("[pumpportal] Connected to PumpPortal");
       ws.send(JSON.stringify({ method: "subscribeNewToken" }));
 
+      if (state.mode === "TRIPLE") {
+        ws.send(JSON.stringify({ method: "subscribeMigration" }));
+        log("[pumpportal] Subscribed to migration events");
+      }
+
       state.pumpPortalPingInterval = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
           ws.ping();
@@ -87,6 +92,26 @@ function connectPumpPortal() {
         if (!data.mint) return;
 
         const now = Date.now();
+
+        // Migration event — has a pool address
+        if (data.pool) {
+          if (state.mode !== "TRIPLE") return;
+          state.migrationProviderLastEventAt.set("pumpportal", now);
+          state.migrationProvidersStalled.delete("pumpportal");
+          state.totalMigrations++;
+          log(`[migration] Graduated: ${data.mint.slice(0, 8)}... (pool: ${String(data.pool).slice(0, 8)}...)`);
+          await db.insert(migrationsTable).values({
+            mint: data.mint,
+            poolAddress: String(data.pool),
+            signature: data.signature ?? "",
+            provider: "pumpportal",
+            detectedAt: now,
+            mintAmount: data.vTokensInBondingCurve?.toString() ?? "0",
+            solAmount: data.vSolInBondingCurve?.toString() ?? "0",
+          }).onConflictDoNothing();
+          return;
+        }
+
         state.coordinatorLastNewTokenAt = now;
 
         if (state.seenMints.has(data.mint)) {
@@ -482,13 +507,7 @@ export async function startTest(mode: "SINGLE" | "DUAL" | "TRIPLE") {
   connectPumpPortal();
 
   if (mode === "TRIPLE") {
-    const chainstackUrl = process.env.CHAINSTACK_MIGRATION_URL;
-    if (chainstackUrl) {
-      await startMigrationDetection([{ name: "coordinator-chainstack-1", url: chainstackUrl }]);
-      log("[migration] TRIPLE mode active — coordinator migration detection started");
-    } else {
-      log("[migration] TRIPLE mode active — no CHAINSTACK_MIGRATION_URL set, relying on proxy events only", "warn");
-    }
+    log("[migration] TRIPLE mode active — migration detection via PumpPortal subscribeMigration");
   }
 
   await new Promise((resolve) => setTimeout(resolve, 1000));
