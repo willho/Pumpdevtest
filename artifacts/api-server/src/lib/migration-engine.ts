@@ -186,11 +186,6 @@ function connectProvider(provider: MigrationProvider, offsetMinutes: number) {
                 `[migration] Graduated: ${migration.mint.slice(0, 8)}... via ${provider.name}`
               );
             }
-          } else if (logs.some((l: string) => l.includes("Error"))) {
-            log(
-              `[migration] Failed tx: ${signature.slice(0, 8)}...`,
-              "warn"
-            );
           }
         }
       } catch (error) {
