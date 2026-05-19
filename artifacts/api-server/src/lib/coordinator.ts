@@ -81,8 +81,28 @@ export function startCoordinator(server: Server) {
             const existing = msg["existingSubscriptions"] as string[];
             const proxy = state.proxies.get(proxyId);
             if (proxy) {
+              // Only restore mints still active in another provider's set.
+              // Mints that rotated out while this proxy was offline won't appear
+              // in any other provider's subscriptions — filtering them prevents
+              // ghost subs from inflating the proxy's count for fewest-first assignment.
+              const activeMints = new Set<string>([
+                ...state.testSubscriptions,
+                ...Array.from(state.proxies.values())
+                  .filter(p => p.id !== proxyId)
+                  .flatMap(p => [...p.subscriptions]),
+              ]);
+              let restored = 0;
+              let dropped = 0;
               for (const mint of existing) {
-                proxy.subscriptions.add(mint);
+                if (activeMints.has(mint)) {
+                  proxy.subscriptions.add(mint);
+                  restored++;
+                } else {
+                  dropped++;
+                }
+              }
+              if (dropped > 0) {
+                log(`[coordinator] Proxy ${name} restored ${restored} subs, dropped ${dropped} rotated-out`);
               }
             }
           }
