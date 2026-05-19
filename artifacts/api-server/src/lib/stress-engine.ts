@@ -482,8 +482,13 @@ export async function startTest(mode: "SINGLE" | "DUAL" | "TRIPLE") {
   connectPumpPortal();
 
   if (mode === "TRIPLE") {
-    await startMigrationDetection();
-    log("[migration] TRIPLE mode active — migration detection started");
+    const chainstackUrl = process.env.CHAINSTACK_MIGRATION_URL;
+    if (chainstackUrl) {
+      await startMigrationDetection([{ name: "coordinator-chainstack-1", url: chainstackUrl }]);
+      log("[migration] TRIPLE mode active — coordinator migration detection started");
+    } else {
+      log("[migration] TRIPLE mode active — no CHAINSTACK_MIGRATION_URL set, relying on proxy events only", "warn");
+    }
   }
 
   await new Promise((resolve) => setTimeout(resolve, 1000));
