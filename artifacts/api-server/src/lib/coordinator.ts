@@ -5,7 +5,6 @@ import { db } from "@workspace/db";
 import { tradesTable, migrationsTable } from "@workspace/db/schema";
 import { state, log, MIGRATION_STALL_THRESHOLD } from "./stress-state.js";
 import { checkTradeResumeCompletion } from "./stress-engine.js";
-import { getMigrationStats } from "./migration-engine.js";
 
 export function startCoordinator(server: Server) {
   const wss = new WebSocketServer({ noServer: true });

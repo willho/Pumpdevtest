@@ -1,16 +1,13 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { migrationsTable, rotationsTable } from "@workspace/db/schema";
-import { eq, count, desc } from "drizzle-orm";
+import { desc } from "drizzle-orm";
 import { state, log } from "../lib/stress-state.js";
-import { getMigrationStats } from "../lib/migration-engine.js";
 
 const router = Router();
 
 router.get("/migrations/stats", async (_req, res) => {
   try {
-    const engineStats = await getMigrationStats();
-
     const [migrationCount, rotationCount] = await Promise.all([
       db.$count(migrationsTable),
       db.$count(rotationsTable),
@@ -41,7 +38,6 @@ router.get("/migrations/stats", async (_req, res) => {
           state.migrationProviderLastEventAt
         ),
       },
-      engineStats,
       recentRotations,
       timestamp: Date.now(),
     });

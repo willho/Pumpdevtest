@@ -1,7 +1,7 @@
 import WebSocket from "ws";
 import { db } from "@workspace/db";
 import { tokensTable, tradesTable, resetsTable, migrationsTable, rotationsTable } from "@workspace/db/schema";
-import { sql, eq, and, isNull } from "drizzle-orm";
+import { sql, eq, and, isNull, inArray, or } from "drizzle-orm";
 import {
   state,
   log,
@@ -12,7 +12,6 @@ import {
   PUMPPORTAL_STALL_THRESHOLD,
   MIGRATION_STALL_THRESHOLD,
 } from "./stress-state.js";
-import { stopMigrationDetection } from "./migration-engine.js";
 import { checkMigrationProviderStall, startDiscoveryStreams } from "./coordinator.js";
 
 // ---------------------------------------------------------------------------
@@ -310,20 +309,132 @@ function refreshTotalSubCount() {
 
 async function handleAtCapacity(mint: string, target: string) {
   if (providerSubCount(target) >= PER_PROVIDER_LIMIT) {
-    const oldest =
+    const subscribedMints = Array.from(
       target === "test"
-        ? state.testSubscriptions.values().next().value
-        : state.proxies.get(target)?.subscriptions.values().next().value;
+        ? state.testSubscriptions
+        : (state.proxies.get(target)?.subscriptions ?? new Set<string>())
+    );
 
-    if (oldest) {
-      providerUnsubscribe(target, oldest);
-      await db
-        .update(tokensTable)
-        .set({ unsubscribedAt: Date.now() })
-        .where(eq(tokensTable.mint, oldest));
+    let tokenToEvict: string | null = null;
+
+    if (subscribedMints.length > 0) {
+      // Find the token assigned to this provider with least recent trade activity.
+      // Filter by both provider assignment in DB and in-memory subscription set
+      // so the candidate pool stays accurate even under partial state drift.
+      const lastTrades = await db
+        .select({
+          mint: tradesTable.mint,
+          lastTradeAt: sql<number>`MAX(${tradesTable.receivedAt})`.as("last_trade_at"),
+        })
+        .from(tradesTable)
+        .where(inArray(tradesTable.mint, subscribedMints))
+        .groupBy(tradesTable.mint);
+
+      const lastTradeMap = new Map(lastTrades.map((r) => [r.mint, r.lastTradeAt]));
+
+      const tokenRows = await db
+        .select({ mint: tokensTable.mint, assignedAt: tokensTable.assignedAt })
+        .from(tokensTable)
+        .where(
+          and(
+            inArray(tokensTable.mint, subscribedMints),
+            or(eq(tokensTable.provider1, target), eq(tokensTable.provider2, target))
+          )
+        );
+
+      let quietestActivity = Infinity;
+      for (const row of tokenRows) {
+        const activity = lastTradeMap.get(row.mint) ?? row.assignedAt;
+        if (activity < quietestActivity) {
+          quietestActivity = activity;
+          tokenToEvict = row.mint;
+        }
+      }
+    }
+
+    // Fall back to FIFO if activity query returned nothing
+    if (!tokenToEvict) {
+      tokenToEvict =
+        target === "test"
+          ? (state.testSubscriptions.values().next().value ?? null)
+          : (state.proxies.get(target)?.subscriptions.values().next().value ?? null);
+    }
+
+    if (tokenToEvict) {
+      const now = Date.now();
+
+      // Collect final metrics and both provider assignments before eviction
+      const [lastTradeRows, tradeData, tokenInfo, migrationRows] = await Promise.all([
+        db
+          .select({ receivedAt: tradesTable.receivedAt })
+          .from(tradesTable)
+          .where(eq(tradesTable.mint, tokenToEvict))
+          .orderBy(sql`${tradesTable.receivedAt} DESC`)
+          .limit(1),
+        db
+          .select({ wallet: tradesTable.wallet })
+          .from(tradesTable)
+          .where(eq(tradesTable.mint, tokenToEvict)),
+        db
+          .select({
+            assignedAt: tokensTable.assignedAt,
+            provider1: tokensTable.provider1,
+            provider2: tokensTable.provider2,
+          })
+          .from(tokensTable)
+          .where(eq(tokensTable.mint, tokenToEvict))
+          .limit(1),
+        db
+          .select({ detectedAt: migrationsTable.detectedAt })
+          .from(migrationsTable)
+          .where(eq(migrationsTable.mint, tokenToEvict))
+          .limit(1),
+      ]);
+
+      const assignedAt = tokenInfo[0]?.assignedAt ?? now;
+      const lastTradeAt = lastTradeRows.length > 0 ? lastTradeRows[0].receivedAt : assignedAt;
+      const timeSinceLastTradeMs = now - lastTradeAt;
+      const uniqueBuyers = new Set(tradeData.map((t) => t.wallet).filter(Boolean)).size;
+      const volume = tradeData.length;
+      const graduatedAt = migrationRows.length > 0 ? migrationRows[0].detectedAt : null;
+
+      // Record rotation metrics
+      await db.insert(rotationsTable).values({
+        mint: tokenToEvict,
+        discoveredAt: assignedAt,
+        graduatedAt: graduatedAt ?? null,
+        lastTradeAt,
+        rotatedAt: now,
+        timeSinceLastTradeMs,
+        ageMs: now - assignedAt,
+        uniqueBuyers: uniqueBuyers.toString(),
+        totalVolumeSol: volume.toString(),
+      });
+
+      // Unsubscribe from ALL providers that hold this token and free their
+      // in-memory slots. Both providers must be cleaned up before deleting the
+      // DB row to prevent ghost subscriptions consuming capacity indefinitely.
+      const allProviders = [
+        tokenInfo[0]?.provider1 ?? null,
+        tokenInfo[0]?.provider2 ?? null,
+      ];
+      for (const provider of allProviders) {
+        if (!provider) continue;
+        const subSet =
+          provider === "test"
+            ? state.testSubscriptions
+            : state.proxies.get(provider)?.subscriptions;
+        if (!subSet?.has(tokenToEvict)) continue;
+        // Send WS notification (best-effort), then force-free the in-memory slot
+        // so the capacity count is correct even if the send fails.
+        providerUnsubscribe(provider, tokenToEvict);
+        subSet.delete(tokenToEvict);
+      }
+
+      await db.delete(tokensTable).where(eq(tokensTable.mint, tokenToEvict));
       state.rotationCount++;
       log(
-        `Rotation [${target.slice(0, 8)}]: dropped ${oldest.slice(0, 8)}..., adding ${mint.slice(0, 8)}...`
+        `Rotation [${target.slice(0, 8)}]: dropped ${tokenToEvict.slice(0, 8)}... (${Math.round(timeSinceLastTradeMs / 1000)}s inactive), adding ${mint.slice(0, 8)}...`
       );
     }
   }
@@ -518,6 +629,5 @@ export function stopTest() {
   for (const proxyId of state.proxies.keys()) {
     sendToProxy(proxyId, { type: "reset" });
   }
-  stopMigrationDetection().catch(() => {});
   log("TEST STOPPED", "warn");
 }
