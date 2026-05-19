@@ -20,7 +20,7 @@ export function startCoordinator(server: Server) {
       wsAlive.isAlive = false;
       ws.ping();
     }
-  }, 30000);
+  }, 10000);
 
   wss.on("close", () => {
     clearInterval(heartbeatInterval);
@@ -78,6 +78,16 @@ export function startCoordinator(server: Server) {
           state.proxyPumpPortalLastNewTokenAt.set(proxyId, Date.now());
           state.migrationProviderLastEventAt.set(name, Date.now());
 
+          if (Array.isArray(msg["existingSubscriptions"])) {
+            const existing = msg["existingSubscriptions"] as string[];
+            const proxy = state.proxies.get(proxyId);
+            if (proxy) {
+              for (const mint of existing) {
+                proxy.subscriptions.add(mint);
+              }
+            }
+          }
+
           ws.send(
             JSON.stringify({
               type: "welcome",
@@ -89,6 +99,12 @@ export function startCoordinator(server: Server) {
           log(
             `[coordinator] Proxy joined: ${name} v${version} capacity=${capacity} id=${proxyId.slice(0, 8)} pumpportal_offset=${pumpportalPingOffsetMin}min`
           );
+
+          if (state.isRunning) {
+            ws.send(JSON.stringify({ type: "start_discovery" }));
+            log(`[coordinator] Sent start_discovery to rejoining proxy ${name}`);
+          }
+
           return;
         }
 
@@ -166,7 +182,7 @@ export function startCoordinator(server: Server) {
             detectedAt: now,
             mintAmount: msg["mintAmount"] ? String(msg["mintAmount"]) : "0",
             solAmount: msg["solAmount"] ? String(msg["solAmount"]) : "0",
-          });
+          }).onConflictDoNothing();
         }
       } catch (e: unknown) {
         log(`[coordinator] Message error: ${(e as Error).message}`, "error");
@@ -207,6 +223,7 @@ export function startDiscoveryStreams(): void {
 }
 
 export function checkMigrationProviderStall(): void {
+  if (state.totalMigrations < 10) return;
   const now = Date.now();
 
   for (const [provider, lastEventTime] of state.migrationProviderLastEventAt) {
