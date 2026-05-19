@@ -10,6 +10,22 @@ import { getMigrationStats } from "./migration-engine.js";
 export function startCoordinator(server: Server) {
   const wss = new WebSocketServer({ noServer: true });
 
+  const heartbeatInterval = setInterval(() => {
+    for (const ws of wss.clients) {
+      const wsAlive = (ws as WebSocket & { isAlive?: boolean });
+      if (wsAlive.isAlive === false) {
+        ws.terminate();
+        continue;
+      }
+      wsAlive.isAlive = false;
+      ws.ping();
+    }
+  }, 30000);
+
+  wss.on("close", () => {
+    clearInterval(heartbeatInterval);
+  });
+
   server.on("upgrade", (req, socket, head) => {
     if (req.url?.startsWith("/coordinator")) {
       wss.handleUpgrade(req, socket as import("stream").Duplex, head, (ws) => {
@@ -22,6 +38,10 @@ export function startCoordinator(server: Server) {
 
   wss.on("connection", (ws: WebSocket) => {
     let proxyId: string | null = null;
+    (ws as WebSocket & { isAlive?: boolean }).isAlive = true;
+    ws.on("pong", () => {
+      (ws as WebSocket & { isAlive?: boolean }).isAlive = true;
+    });
 
     ws.on("message", async (raw) => {
       try {
