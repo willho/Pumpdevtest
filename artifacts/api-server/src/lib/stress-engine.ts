@@ -66,10 +66,15 @@ async function assignAndSubscribeMint(mint: string) {
   state.totalTokens++;
   const tokenIndex = state.totalTokens;
 
-  const allProviders = ["test", ...Array.from(state.proxies.keys())];
-  const provider1 = allProviders[tokenIndex % allProviders.length];
-  const provider2raw = allProviders[(tokenIndex + 1) % allProviders.length];
-  const provider2 = provider2raw !== provider1 ? provider2raw : null;
+  // Fewest-subscriptions-first: always assign to the two least-loaded providers.
+  // When a proxy rejoins with 0 subs it sits at the bottom and catches up automatically.
+  const providersByLoad = [
+    { id: "test", count: state.testSubscriptions.size },
+    ...Array.from(state.proxies.entries()).map(([id, p]) => ({ id, count: p.subscriptions.size })),
+  ].sort((a, b) => a.count - b.count);
+
+  const provider1 = providersByLoad[0].id;
+  const provider2 = providersByLoad.length > 1 ? providersByLoad[1].id : null;
 
   await db.insert(tokensTable).values({
     mint,
