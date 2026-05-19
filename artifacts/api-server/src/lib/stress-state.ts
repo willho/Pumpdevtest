@@ -52,6 +52,8 @@ export interface StressState {
   testStartAt: number;
   migrationProviderLastEventAt: Map<string, number>;
   migrationProvidersStalled: Set<string>;
+  proxyReconnectPhases: Map<string, number>;
+  nonPumpSwapMigrations: number;
 }
 
 export const state: StressState = {
@@ -85,6 +87,8 @@ export const state: StressState = {
   testStartAt: 0,
   migrationProviderLastEventAt: new Map(),
   migrationProvidersStalled: new Set(),
+  proxyReconnectPhases: new Map(),
+  nonPumpSwapMigrations: 0,
 };
 
 export const PER_PROVIDER_LIMIT = 4950;

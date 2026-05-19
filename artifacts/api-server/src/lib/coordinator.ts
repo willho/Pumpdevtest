@@ -88,16 +88,27 @@ export function startCoordinator(server: Server) {
             }
           }
 
+          const isRejoining = state.proxyReconnectPhases.has(name);
+          let reconnectAfterSec: number;
+          if (isRejoining) {
+            reconnectAfterSec = 240;
+          } else {
+            const phaseIndex = state.proxyReconnectPhases.size;
+            reconnectAfterSec = Math.max(60, 240 - phaseIndex * 120);
+            state.proxyReconnectPhases.set(name, reconnectAfterSec);
+          }
+
           ws.send(
             JSON.stringify({
               type: "welcome",
               proxyId,
               pumpportalPingOffsetMin,
               migrationPingOffsetMin,
+              reconnectAfterSec,
             })
           );
           log(
-            `[coordinator] Proxy joined: ${name} v${version} capacity=${capacity} id=${proxyId.slice(0, 8)} pumpportal_offset=${pumpportalPingOffsetMin}min`
+            `[coordinator] Proxy joined: ${name} v${version} capacity=${capacity} id=${proxyId.slice(0, 8)} pumpportal_offset=${pumpportalPingOffsetMin}min reconnect=${reconnectAfterSec}s`
           );
 
           if (state.isRunning) {

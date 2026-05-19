@@ -224,6 +224,7 @@ export default function Dashboard() {
         <section className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4">
           <StatBox label="SUBSCRIPTIONS" value={statusData?.subscriptionsCount ?? 0} icon={Activity} />
           <StatBox label="MIGRATIONS" value={statusData?.totalMigrations ?? 0} icon={Database} highlight={!!(statusData?.totalMigrations && statusData.totalMigrations > 0)} />
+          <StatBox label="ALT_POOL" value={statusData?.nonPumpSwapMigrations ?? 0} icon={Database} highlight={!!(statusData?.nonPumpSwapMigrations && statusData.nonPumpSwapMigrations > 0)} />
           <StatBox label="TOTAL_TOKENS" value={statusData?.totalTokens ?? 0} icon={Server} />
           <StatBox
             label="ROTATIONS"

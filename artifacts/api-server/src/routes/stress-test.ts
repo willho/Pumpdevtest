@@ -51,6 +51,7 @@ router.get("/test/status", (_req, res) => {
     totalTokens: state.totalTokens,
     totalTrades: state.totalTrades,
     totalMigrations: state.totalMigrations,
+    nonPumpSwapMigrations: state.nonPumpSwapMigrations,
     uniqueWalletsCount: state.uniqueWallets.size,
     testStartAt: state.testStartAt,
     subscriptionsCount: state.subscriptionsCount,

@@ -57,6 +57,7 @@ export interface TestStatus {
   totalTokens: number;
   totalTrades: number;
   totalMigrations: number;
+  nonPumpSwapMigrations: number;
   uniqueWalletsCount: number;
   testStartAt: number;
   subscriptionsCount: number;

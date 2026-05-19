@@ -126,13 +126,22 @@ function connectPumpPortal() {
 
         // Migration event
         if (data.txType === "migrate") {
+          const pool = String(data.pool ?? "unknown");
+          const isPumpSwap = pool === "pump-amm";
           state.migrationProviderLastEventAt.set("pumpportal", now);
           state.migrationProvidersStalled.delete("pumpportal");
           state.totalMigrations++;
-          log(`[migration] Graduated: ${data.mint.slice(0, 8)}... sig: ${String(data.signature).slice(0, 8)}...`);
+
+          if (isPumpSwap) {
+            log(`[migration] Graduated (PumpSwap): ${data.mint.slice(0, 8)}... sig: ${String(data.signature).slice(0, 8)}...`);
+          } else {
+            state.nonPumpSwapMigrations++;
+            log(`[migration] Graduated (non-PumpSwap): ${data.mint.slice(0, 8)}... pool: ${pool}`);
+          }
+
           await db.insert(migrationsTable).values({
             mint: data.mint,
-            poolAddress: "pump-amm",
+            poolAddress: pool,
             signature: data.signature ?? "",
             provider: "pumpportal",
             detectedAt: now,
@@ -140,7 +149,7 @@ function connectPumpPortal() {
             solAmount: "0",
           }).onConflictDoNothing();
 
-          if (state.sourceMigration) {
+          if (isPumpSwap && state.sourceMigration) {
             await assignAndSubscribeMint(data.mint);
           }
           return;
