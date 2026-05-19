@@ -41,8 +41,6 @@ export function startCoordinator(server: Server) {
           const migrationPingOffsetMin = Math.floor(
             (proxyIndex * 30) / totalProxies
           );
-          const migrationUrl = process.env.CHAINSTACK_MIGRATION_URL;
-
           state.proxies.set(proxyId, {
             id: proxyId,
             name,
@@ -66,7 +64,6 @@ export function startCoordinator(server: Server) {
               proxyId,
               pumpportalPingOffsetMin,
               migrationPingOffsetMin,
-              migrationUrl,
             })
           );
           log(
