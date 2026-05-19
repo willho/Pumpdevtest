@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { migrationsTable, rotationsTable } from "@workspace/db/schema";
-import { desc } from "drizzle-orm";
+import { eq, count, desc } from "drizzle-orm";
 import { state, log } from "../lib/stress-state.js";
 import { getMigrationStats } from "../lib/migration-engine.js";
 
@@ -37,7 +37,9 @@ router.get("/migrations/stats", async (_req, res) => {
       migrationProviders: {
         active: Array.from(state.migrationProviderLastEventAt.keys()),
         stalled: Array.from(state.migrationProvidersStalled),
-        lastEventTimes: Object.fromEntries(state.migrationProviderLastEventAt),
+        lastEventTimes: Object.fromEntries(
+          state.migrationProviderLastEventAt
+        ),
       },
       engineStats,
       recentRotations,

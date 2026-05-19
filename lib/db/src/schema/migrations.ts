@@ -8,7 +8,7 @@ export const migrationsTable = pgTable("migrations", {
   detectedAt: bigint("detected_at", { mode: "number" }).notNull(),
   mintAmount: numeric("mint_amount").notNull(),
   solAmount: numeric("sol_amount").notNull(),
-  provider: varchar("provider", { length: 50 }).notNull(),
+  provider: varchar("provider", { length: 50 }).notNull(), // which Chainstack provider detected it
   createdAt: timestamp("created_at").defaultNow(),
 });
 

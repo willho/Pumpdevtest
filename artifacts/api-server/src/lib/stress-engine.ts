@@ -11,9 +11,10 @@ import {
   DETECTION_WINDOW,
   RESET_COOLDOWN,
   PUMPPORTAL_STALL_THRESHOLD,
+  MIGRATION_STALL_THRESHOLD,
 } from "./stress-state.js";
-import { stopMigrationDetection } from "./migration-engine.js";
-import { checkMigrationProviderStall } from "./coordinator.js";
+import { startMigrationDetection, stopMigrationDetection } from "./migration-engine.js";
+import { checkMigrationProviderStall, startDiscoveryStreams } from "./coordinator.js";
 
 // ---------------------------------------------------------------------------
 // Trade resume latency
@@ -446,6 +447,8 @@ export async function startTest(mode: "SINGLE" | "DUAL" | "TRIPLE") {
   state.tradeResumeStats = { best: Infinity, worst: 0, all: [] };
   state.totalTokens = 0;
   state.totalTrades = 0;
+  state.totalMigrations = 0;
+  state.totalRotations = 0;
   state.testSubscriptions = new Set();
   state.testLastTradeAt = Date.now();
   state.testIsStalled = false;
@@ -479,10 +482,13 @@ export async function startTest(mode: "SINGLE" | "DUAL" | "TRIPLE") {
   connectPumpPortal();
 
   if (mode === "TRIPLE") {
-    log("[migration] TRIPLE mode active — awaiting migration events from proxies");
+    await startMigrationDetection();
+    log("[migration] TRIPLE mode active — migration detection started");
   }
 
   await new Promise((resolve) => setTimeout(resolve, 1000));
+
+  startDiscoveryStreams();
 
   setInterval(() => detectStalls(), 1000);
 }

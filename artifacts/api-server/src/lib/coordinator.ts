@@ -5,6 +5,7 @@ import { db } from "@workspace/db";
 import { tradesTable, migrationsTable } from "@workspace/db/schema";
 import { state, log, MIGRATION_STALL_THRESHOLD } from "./stress-state.js";
 import { checkTradeResumeCompletion } from "./stress-engine.js";
+import { getMigrationStats } from "./migration-engine.js";
 
 export function startCoordinator(server: Server) {
   const wss = new WebSocketServer({ noServer: true });
@@ -177,6 +178,15 @@ export function startCoordinator(server: Server) {
   });
 
   log("[coordinator] Listening on /coordinator");
+}
+
+export function startDiscoveryStreams(): void {
+  for (const [proxyId, ws] of state.proxyWs) {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "start_discovery" }));
+    }
+  }
+  log("[coordinator] Sent start_discovery signal to all proxies");
 }
 
 export function checkMigrationProviderStall(): void {

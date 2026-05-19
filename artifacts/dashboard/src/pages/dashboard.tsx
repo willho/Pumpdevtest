@@ -72,9 +72,6 @@ export default function Dashboard() {
   );
 
   const logsEndRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [statusData?.logs]);
 
   const handleStart = () => {
     setShowReport(false);
