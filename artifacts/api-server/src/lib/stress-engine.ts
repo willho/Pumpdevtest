@@ -82,11 +82,36 @@ async function assignAndSubscribeMint(mint: string) {
     assignedAt: Date.now(),
   });
 
-  await handleAtCapacity(mint, provider1);
-  if (provider2) await handleAtCapacity(mint, provider2);
+  // Attempt to subscribe to 2 providers in fewest-first order.
+  // If a provider's WS is dead at assignment time, skip it and fall through
+  // to the next least-loaded provider — the mint always gets 2 live subscribers.
+  const assigned: string[] = [];
+  for (const { id } of providersByLoad) {
+    if (assigned.length >= 2) break;
+    const ok = await handleAtCapacity(mint, id);
+    if (ok) {
+      assigned.push(id);
+    } else {
+      log(`[assign] Provider ${id.slice(0, 8)} unreachable, trying next`, "warn");
+    }
+  }
+
+  const actualP1 = assigned[0] ?? provider1;
+  const actualP2 = assigned[1] ?? null;
+
+  if (actualP1 !== provider1 || actualP2 !== provider2) {
+    await db
+      .update(tokensTable)
+      .set({ provider1: actualP1, provider2: actualP2 })
+      .where(eq(tokensTable.mint, mint));
+    log(
+      `[assign] Fallback: ${mint.slice(0, 8)} → ${actualP1.slice(0, 8)}${actualP2 ? " + " + actualP2.slice(0, 8) : " (single-covered)"}`,
+      "warn"
+    );
+  }
 
   log(
-    `Token ${tokenIndex}: ${mint.slice(0, 8)}... → ${provider1.slice(0, 8)}${provider2 ? ", " + provider2.slice(0, 8) : ""}`
+    `Token ${tokenIndex}: ${mint.slice(0, 8)}... → ${actualP1.slice(0, 8)}${actualP2 ? ", " + actualP2.slice(0, 8) : ""}`
   );
 
   const limit = (1 + state.proxies.size) * PER_PROVIDER_LIMIT;
@@ -307,7 +332,15 @@ function refreshTotalSubCount() {
 // Capacity & rotation
 // ---------------------------------------------------------------------------
 
-async function handleAtCapacity(mint: string, target: string) {
+async function handleAtCapacity(mint: string, target: string): Promise<boolean> {
+  // Early exit if provider is not reachable — skip rotation work and DB
+  // updates for dead providers so the caller can fall through to a live one.
+  if (target === "test") {
+    if (!state.testConnection || state.testConnection.readyState !== WebSocket.OPEN) return false;
+  } else {
+    if (!state.proxies.has(target)) return false;
+  }
+
   if (providerSubCount(target) >= PER_PROVIDER_LIMIT) {
     const subscribedMints = Array.from(
       target === "test"
@@ -439,13 +472,16 @@ async function handleAtCapacity(mint: string, target: string) {
     }
   }
 
-  providerSubscribe(target, [mint]);
-  await db
-    .update(tokensTable)
-    .set({ subscribedAt: Date.now() })
-    .where(eq(tokensTable.mint, mint));
+  const ok = providerSubscribe(target, [mint]);
+  if (ok) {
+    await db
+      .update(tokensTable)
+      .set({ subscribedAt: Date.now() })
+      .where(eq(tokensTable.mint, mint));
+  }
 
   refreshTotalSubCount();
+  return ok;
 }
 
 // ---------------------------------------------------------------------------
