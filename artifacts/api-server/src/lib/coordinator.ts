@@ -175,10 +175,15 @@ export function startCoordinator(server: Server) {
 
           if (state.seenMints.has(mint)) return;
 
-          state.seenMints.add(mint);
-          log(
-            `[coordinator] New token (proxy): ${mint.slice(0, 8)}... from ${proxy.name}`
-          );
+          // Call assignAndSubscribeMint so proxy-discovered tokens are fully
+          // assigned and subscribed even when the proxy wins the discovery race
+          // ahead of the coordinator's own PumpPortal connection.
+          if (state.sourceNewToken) {
+            log(`[coordinator] New token (proxy-first): ${mint.slice(0, 8)}... from ${proxy.name}`);
+            await assignAndSubscribeMint(mint);
+          } else {
+            state.seenMints.add(mint);
+          }
         }
 
         if (msg["type"] === "buffered_mints") {
