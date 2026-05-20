@@ -2,7 +2,7 @@ import http from "http";
 import app from "./app.js";
 import { logger } from "./lib/logger.js";
 import { startCoordinator } from "./lib/coordinator.js";
-import { startTest } from "./lib/stress-engine.js";
+import { autoResumeTest } from "./lib/stress-engine.js";
 
 const rawPort = process.env["PORT"];
 
@@ -26,7 +26,7 @@ server.listen(port, (err?: Error) => {
     process.exit(1);
   }
   logger.info({ port }, "Server listening");
-  startTest(true, false).catch((e: Error) =>
+  autoResumeTest().catch((e: Error) =>
     logger.error({ err: e }, "Auto-start failed")
   );
 });

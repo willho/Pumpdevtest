@@ -4,7 +4,7 @@ import { randomUUID } from "crypto";
 import { db } from "@workspace/db";
 import { tradesTable, migrationsTable } from "@workspace/db/schema";
 import { state, log, MIGRATION_STALL_THRESHOLD } from "./stress-state.js";
-import { checkTradeResumeCompletion } from "./stress-engine.js";
+import { checkTradeResumeCompletion, assignAndSubscribeMint } from "./stress-engine.js";
 
 export function startCoordinator(server: Server) {
   const wss = new WebSocketServer({ noServer: true });
@@ -183,6 +183,40 @@ export function startCoordinator(server: Server) {
           log(
             `[coordinator] New token (proxy): ${mint.slice(0, 8)}... from ${proxy.name}`
           );
+        }
+
+        if (msg["type"] === "buffered_mints") {
+          const mints = msg["mints"] as unknown[];
+          if (!Array.isArray(mints)) return;
+          let assigned = 0;
+          for (const mint of mints) {
+            if (typeof mint === "string" && !state.seenMints.has(mint)) {
+              await assignAndSubscribeMint(mint);
+              assigned++;
+            }
+          }
+          if (assigned > 0) log(`[coordinator] Proxy ${name} flushed ${assigned} buffered mints`);
+          return;
+        }
+
+        if (msg["type"] === "buffered_trades") {
+          const trades = msg["trades"] as unknown[];
+          if (!Array.isArray(trades) || trades.length === 0) return;
+          const rows = (trades as Array<Record<string, unknown>>)
+            .filter(t => t["mint"] && t["signature"])
+            .map(t => ({
+              mint: String(t["mint"]),
+              provider: proxyId,
+              signature: String(t["signature"]),
+              wallet: t["wallet"] ? String(t["wallet"]) : null,
+              receivedAt: Number(t["receivedAt"] ?? Date.now()),
+            }));
+          if (rows.length > 0) {
+            await db.insert(tradesTable).values(rows).onConflictDoNothing();
+            state.totalTrades += rows.length;
+          }
+          log(`[coordinator] Proxy ${name} flushed ${rows.length} buffered trades`);
+          return;
         }
 
         if (msg["type"] === "migration_detected") {

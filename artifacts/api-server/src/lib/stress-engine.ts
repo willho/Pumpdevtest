@@ -58,7 +58,7 @@ export async function checkTradeResumeCompletion(
 // Mint assignment + subscription (shared by new-token and migration paths)
 // ---------------------------------------------------------------------------
 
-async function assignAndSubscribeMint(mint: string) {
+export async function assignAndSubscribeMint(mint: string) {
   if (state.seenMints.has(mint)) return;
   state.seenMints.add(mint);
 
@@ -229,6 +229,13 @@ export function connectTestPumpDev() {
 
     ws.on("open", () => {
       log("[test] Connected to PumpDev");
+      if (state.testSubscriptions.size > 0) {
+        const mints = [...state.testSubscriptions];
+        for (let i = 0; i < mints.length; i += 100) {
+          ws.send(JSON.stringify({ method: "subscribeTokenTrade", keys: mints.slice(i, i + 100) }));
+        }
+        log(`[test] Re-subscribed to ${mints.length} existing mints`);
+      }
     });
 
     ws.on("message", async (raw: Buffer) => {
@@ -639,6 +646,68 @@ export async function startTest(sourceNewToken: boolean, sourceMigration: boolea
   log(`TEST STARTED (Sources: ${sources}, Limit: ${limit} tokens, Proxies: ${state.proxies.size})`);
 
   await db.execute(sql`TRUNCATE tokens, trades, resets, migrations, rotations`);
+
+  connectTestPumpDev();
+  connectPumpPortal();
+
+  await new Promise((resolve) => setTimeout(resolve, 1000));
+
+  startDiscoveryStreams();
+
+  setInterval(() => detectStalls(), 1000);
+}
+
+export async function autoResumeTest() {
+  if (state.isRunning) return;
+
+  const existingTokens = await db
+    .select({
+      mint: tokensTable.mint,
+      provider1: tokensTable.provider1,
+      provider2: tokensTable.provider2,
+    })
+    .from(tokensTable);
+
+  if (existingTokens.length === 0) {
+    log("[resume] No existing tokens — starting fresh");
+    await startTest(true, false);
+    return;
+  }
+
+  state.isRunning = true;
+  state.mode = "RUNNING";
+  state.sourceNewToken = true;
+  state.sourceMigration = false;
+  state.logs = [];
+  state.subscriptionsCount = 0;
+  state.rotationCount = 0;
+  state.reconnectStats = { best: Infinity, worst: 0, all: [] };
+  state.tradeResumeStats = { best: Infinity, worst: 0, all: [] };
+  state.totalTokens = existingTokens.length;
+  state.totalTrades = 0;
+  state.totalMigrations = 0;
+  state.totalRotations = 0;
+  state.testSubscriptions = new Set();
+  state.testLastTradeAt = Date.now();
+  state.testIsStalled = false;
+  state.testLastResetAt = 0;
+  state.coordinatorLastNewTokenAt = Date.now();
+  state.seenMints = new Set();
+  state.simultaneousPumpPortalStall = false;
+  state.wasPumpPortalSimultaneouslyStalled = false;
+  state.uniqueWallets = new Set();
+  state.testStartAt = Date.now();
+  state.migrationProviderLastEventAt = new Map();
+  state.migrationProvidersStalled = new Set();
+
+  for (const token of existingTokens) {
+    state.seenMints.add(token.mint);
+    if (token.provider1 === "test" || token.provider2 === "test") {
+      state.testSubscriptions.add(token.mint);
+    }
+  }
+
+  log(`[resume] Resuming: ${existingTokens.length} tokens, ${state.testSubscriptions.size} on test`);
 
   connectTestPumpDev();
   connectPumpPortal();
