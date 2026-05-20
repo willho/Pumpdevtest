@@ -1,6 +1,6 @@
 import WebSocket from "ws";
 import { db } from "@workspace/db";
-import { tokensTable, tradesTable, resetsTable, rotationsTable } from "@workspace/db/schema";
+import { tokensTable, tradesTable, resetsTable, rotationsTable, migrationsTable } from "@workspace/db/schema";
 import { sql, eq, and, isNull, inArray, or } from "drizzle-orm";
 import {
   state,
@@ -142,8 +142,9 @@ function connectPumpPortal() {
 
     ws.on("open", () => {
       ppBackoffMs = PP_BACKOFF_MIN; // reset on success
-      log("[pumpportal] Connected — subscribing to new tokens");
+      log("[pumpportal] Connected — subscribing to new tokens and migrations");
       ws.send(JSON.stringify({ method: "subscribeNewToken" }));
+      ws.send(JSON.stringify({ method: "subscribeMigration" }));
       state.pumpPortalPingInterval = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) ws.ping();
       }, 30 * 60 * 1000);
@@ -153,7 +154,24 @@ function connectPumpPortal() {
       if (!state.isRunning) return;
       try {
         const data = JSON.parse(raw.toString());
-        if (!data.mint || data.txType === "migrate") return;
+        if (!data.mint) return;
+
+        if (data.txType === "migrate") {
+          state.totalMigrations++;
+          const pool = String(data.pool ?? "unknown");
+          log(`[migration] Graduated (${pool}): ${data.mint.slice(0, 8)}...`);
+          await db.insert(migrationsTable).values({
+            mint: data.mint,
+            poolAddress: pool,
+            signature: String(data.signature ?? ""),
+            provider: "pumpportal",
+            detectedAt: Date.now(),
+            mintAmount: "0",
+            solAmount: "0",
+          }).onConflictDoNothing();
+          return;
+        }
+
         state.coordinatorLastNewTokenAt = Date.now();
         if (state.sourceNewToken) {
           await assignAndSubscribeMint(data.mint);
