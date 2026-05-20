@@ -87,17 +87,18 @@ export function startCoordinator(server: Server) {
               const activeRows = await db.select({ mint: tokensTable.mint }).from(tokensTable);
               const activeMints = new Set(activeRows.map(r => r.mint));
               let restored = 0;
-              let dropped = 0;
+              const droppedMints: string[] = [];
               for (const mint of existing) {
                 if (activeMints.has(mint)) {
                   proxy.subscriptions.add(mint);
                   restored++;
                 } else {
-                  dropped++;
+                  droppedMints.push(mint);
                 }
               }
-              if (dropped > 0) {
-                log(`[coordinator] Proxy ${name} restored ${restored} subs, dropped ${dropped} rotated-out`);
+              if (droppedMints.length > 0) {
+                log(`[coordinator] Proxy ${name} restored ${restored} subs, dropping ${droppedMints.length} orphaned — sending unsubscribe`);
+                ws.send(JSON.stringify({ type: "unsubscribe_mints", mints: droppedMints }));
               }
             }
           }
