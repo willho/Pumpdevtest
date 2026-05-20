@@ -114,11 +114,6 @@ async function assignAndSubscribeMint(mint: string) {
     `Token ${tokenIndex}: ${mint.slice(0, 8)}... → ${actualP1.slice(0, 8)}${actualP2 ? ", " + actualP2.slice(0, 8) : ""}`
   );
 
-  const limit = (1 + state.proxies.size) * PER_PROVIDER_LIMIT;
-  if (state.totalTokens >= limit) {
-    log(`Reached capacity limit (${state.totalTokens}/${limit} unique tokens)`);
-    state.isRunning = false;
-  }
 }
 
 // ---------------------------------------------------------------------------
