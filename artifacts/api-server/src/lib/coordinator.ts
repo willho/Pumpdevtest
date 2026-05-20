@@ -2,7 +2,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import type { Server } from "http";
 import { randomUUID } from "crypto";
 import { db } from "@workspace/db";
-import { tradesTable, migrationsTable } from "@workspace/db/schema";
+import { tradesTable, migrationsTable, tokensTable } from "@workspace/db/schema";
 import { state, log, MIGRATION_STALL_THRESHOLD } from "./stress-state.js";
 import { checkTradeResumeCompletion, assignAndSubscribeMint } from "./stress-engine.js";
 
@@ -81,16 +81,11 @@ export function startCoordinator(server: Server) {
             const existing = msg["existingSubscriptions"] as string[];
             const proxy = state.proxies.get(proxyId);
             if (proxy) {
-              // Only restore mints still active in another provider's set.
-              // Mints that rotated out while this proxy was offline won't appear
-              // in any other provider's subscriptions — filtering them prevents
-              // ghost subs from inflating the proxy's count for fewest-first assignment.
-              const activeMints = new Set<string>([
-                ...state.testSubscriptions,
-                ...Array.from(state.proxies.values())
-                  .filter(p => p.id !== proxyId)
-                  .flatMap(p => [...p.subscriptions]),
-              ]);
+              // Use the DB as ground truth: mints still in tokensTable are active,
+              // mints deleted by rotation are genuinely gone. In-memory sets are
+              // unreliable because the other provider sharing a mint may be offline.
+              const activeRows = await db.select({ mint: tokensTable.mint }).from(tokensTable);
+              const activeMints = new Set(activeRows.map(r => r.mint));
               let restored = 0;
               let dropped = 0;
               for (const mint of existing) {
