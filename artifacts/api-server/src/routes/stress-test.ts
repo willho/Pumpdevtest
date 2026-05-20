@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { tokensTable, tradesTable, resetsTable, migrationsTable } from "@workspace/db/schema";
+import { tokensTable, tradesTable, resetsTable, rotationsTable } from "@workspace/db/schema";
 import { sql, eq, or, desc } from "drizzle-orm";
 import { state, log, PER_PROVIDER_LIMIT } from "../lib/stress-state.js";
 import { startTest, stopTest } from "../lib/stress-engine.js";
@@ -9,17 +9,16 @@ const router = Router();
 
 router.post("/test/start", (req, res) => {
   const sourceNewToken = req.body?.sourceNewToken !== false;
-  const sourceMigration = req.body?.sourceMigration === true;
 
   if (state.isRunning) {
     res.status(400).json({ error: "Already running" });
     return;
   }
 
-  startTest(sourceNewToken, sourceMigration).catch((e: Error) =>
+  startTest(sourceNewToken).catch((e: Error) =>
     log(`Start error: ${e.message}`, "error")
   );
-  res.json({ status: "started", sourceNewToken, sourceMigration });
+  res.json({ status: "started", sourceNewToken });
 });
 
 router.post("/test/stop", (_req, res) => {
@@ -47,11 +46,9 @@ router.get("/test/status", (_req, res) => {
   res.json({
     isRunning: state.isRunning,
     sourceNewToken: state.sourceNewToken,
-    sourceMigration: state.sourceMigration,
     totalTokens: state.totalTokens,
     totalTrades: state.totalTrades,
-    totalMigrations: state.totalMigrations,
-    nonPumpSwapMigrations: state.nonPumpSwapMigrations,
+    pumpDevNewTokenIsStalled: state.pumpDevNewTokenIsStalled,
     uniqueWalletsCount: state.uniqueWallets.size,
     testStartAt: state.testStartAt,
     subscriptionsCount: state.subscriptionsCount,
@@ -102,10 +99,7 @@ router.get("/test/report", async (_req, res) => {
         ? Math.round(ts.all.reduce((a, b) => a + b, 0) / ts.all.length)
         : 0;
 
-    const sources = [
-      state.sourceNewToken ? "NEW_TOKEN" : null,
-      state.sourceMigration ? "MIGRATION" : null,
-    ].filter(Boolean).join("+") || "NONE";
+    const sources = state.sourceNewToken ? "NEW_TOKEN" : "NONE";
 
     const proxyLines = Array.from(state.proxies.values())
       .map(
@@ -128,7 +122,6 @@ Capacity Limit:           ${capacityLimit} unique tokens
 Total Tokens Discovered:  ${tokensCount}
 Total Trades Captured:    ${tradesCount}
 Total Resets Triggered:   ${resetsCount}
-Total Migrations:         ${state.totalMigrations}
 Connected Proxies:        ${state.proxies.size}
 
 PROVIDER BREAKDOWN
@@ -213,13 +206,12 @@ router.get("/tokens/:provider", async (req, res) => {
 
 router.get("/db/summary", async (_req, res) => {
   try {
-    const [tokensCount, tradesCount, resetsCount, migrationsCount] = await Promise.all([
+    const [tokensCount, tradesCount, resetsCount] = await Promise.all([
       db.$count(tokensTable),
       db.$count(tradesTable),
       db.$count(resetsTable),
-      db.$count(migrationsTable),
     ]);
-    res.json({ tokens: tokensCount, trades: tradesCount, resets: resetsCount, migrations: migrationsCount });
+    res.json({ tokens: tokensCount, trades: tradesCount, resets: resetsCount });
   } catch (e: unknown) {
     res.status(500).json({ error: (e as Error).message });
   }
@@ -265,11 +257,11 @@ router.get("/db/resets", async (_req, res) => {
   }
 });
 
-router.get("/db/migrations", async (req, res) => {
+router.get("/db/rotations", async (req, res) => {
   try {
     const limit = Math.min(Number(req.query["limit"] ?? 200), 1000);
     const offset = Number(req.query["offset"] ?? 0);
-    const rows = await db.select().from(migrationsTable).orderBy(desc(migrationsTable.detectedAt)).limit(limit).offset(offset);
+    const rows = await db.select().from(rotationsTable).orderBy(desc(rotationsTable.rotatedAt)).limit(limit).offset(offset);
     res.json(rows);
   } catch (e: unknown) {
     res.status(500).json({ error: (e as Error).message });
