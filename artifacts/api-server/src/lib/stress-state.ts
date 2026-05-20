@@ -24,7 +24,6 @@ export interface StressState {
   isRunning: boolean;
   mode: "RUNNING" | null;
   sourceNewToken: boolean;
-  sourceMigration: boolean;
   testConnection: WebSocket | null;
   testSubscriptions: Set<string>;
   testLastTradeAt: number;
@@ -34,7 +33,6 @@ export interface StressState {
   proxyWs: Map<string, WebSocket>;
   totalTokens: number;
   totalTrades: number;
-  totalMigrations: number;
   totalRotations: number;
   subscriptionsCount: number;
   rotationCount: number;
@@ -43,6 +41,8 @@ export interface StressState {
   tradeResumeStats: LatencyStats;
   logs: string[];
   coordinatorLastNewTokenAt: number;
+  pumpDevNewTokenLastAt: number;
+  pumpDevNewTokenIsStalled: boolean;
   proxyPumpPortalLastNewTokenAt: Map<string, number>;
   seenMints: Set<string>;
   pumpPortalPingInterval?: NodeJS.Timeout;
@@ -50,17 +50,13 @@ export interface StressState {
   wasPumpPortalSimultaneouslyStalled: boolean;
   uniqueWallets: Set<string>;
   testStartAt: number;
-  migrationProviderLastEventAt: Map<string, number>;
-  migrationProvidersStalled: Set<string>;
   proxyReconnectPhases: Map<string, number>;
-  nonPumpSwapMigrations: number;
 }
 
 export const state: StressState = {
   isRunning: false,
   mode: null,
   sourceNewToken: true,
-  sourceMigration: false,
   testConnection: null,
   testSubscriptions: new Set(),
   testLastTradeAt: 0,
@@ -70,7 +66,6 @@ export const state: StressState = {
   proxyWs: new Map(),
   totalTokens: 0,
   totalTrades: 0,
-  totalMigrations: 0,
   totalRotations: 0,
   subscriptionsCount: 0,
   rotationCount: 0,
@@ -79,16 +74,15 @@ export const state: StressState = {
   tradeResumeStats: { best: Infinity, worst: 0, all: [] },
   logs: [],
   coordinatorLastNewTokenAt: 0,
+  pumpDevNewTokenLastAt: 0,
+  pumpDevNewTokenIsStalled: false,
   proxyPumpPortalLastNewTokenAt: new Map(),
   seenMints: new Set(),
   simultaneousPumpPortalStall: false,
   wasPumpPortalSimultaneouslyStalled: false,
   uniqueWallets: new Set(),
   testStartAt: 0,
-  migrationProviderLastEventAt: new Map(),
-  migrationProvidersStalled: new Set(),
   proxyReconnectPhases: new Map(),
-  nonPumpSwapMigrations: 0,
 };
 
 export const PER_PROVIDER_LIMIT = 4950;
@@ -96,7 +90,6 @@ export const DETECTION_WINDOW = 5000;
 export const CHECK_INTERVAL = 1000;
 export const RESET_COOLDOWN = 30000;
 export const PUMPPORTAL_STALL_THRESHOLD = 30000;
-export const MIGRATION_STALL_THRESHOLD = 30000;
 
 export function sendToProxy(
   proxyId: string,
