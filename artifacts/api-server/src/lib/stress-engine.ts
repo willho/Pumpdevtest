@@ -207,135 +207,98 @@ function connectPumpPortal() {
 }
 
 // ---------------------------------------------------------------------------
-// PumpDev newToken stream (backup discovery — runs alongside PumpPortal)
+// PumpDev — single connection for both trade stream and newToken backup
 // ---------------------------------------------------------------------------
-
-const PD_NT_BACKOFF_MIN = 3_000; // offset from PumpPortal's 2s start
-const PD_NT_BACKOFF_MAX = 60_000;
-let pdNtBackoffMs = PD_NT_BACKOFF_MIN;
-let pdNtReconnectTimer: NodeJS.Timeout | undefined;
-let pdNtWs: WebSocket | null = null;
-
-function schedulePumpDevNewTokenReconnect(penaltyMs?: number) {
-  if (pdNtReconnectTimer) return;
-  const delay = penaltyMs ?? pdNtBackoffMs;
-  log(`[pumpdev-newtoken] Reconnecting in ${Math.round(delay / 1000)}s`, "warn");
-  pdNtReconnectTimer = setTimeout(() => {
-    pdNtReconnectTimer = undefined;
-    connectPumpDevNewToken();
-  }, delay);
-  if (!penaltyMs) pdNtBackoffMs = Math.min(pdNtBackoffMs * 2, PD_NT_BACKOFF_MAX);
-}
-
-function connectPumpDevNewToken() {
-  try {
-    const ws = new WebSocket("wss://pumpdev.io/ws");
-    pdNtWs = ws;
-
-    ws.on("open", () => {
-      pdNtBackoffMs = PD_NT_BACKOFF_MIN;
-      log("[pumpdev-newtoken] Connected — subscribing to new tokens");
-      ws.send(JSON.stringify({ method: "subscribeNewToken" }));
-    });
-
-    ws.on("message", async (raw: Buffer) => {
-      if (!state.isRunning) return;
-      try {
-        const data = JSON.parse(raw.toString());
-        if (!data.mint || data.txType === "migrate") return;
-        state.pumpDevNewTokenLastAt = Date.now();
-        state.pumpDevNewTokenIsStalled = false;
-        if (state.sourceNewToken) {
-          await assignAndSubscribeMint(data.mint);
-        } else {
-          state.seenMints.add(data.mint);
-        }
-      } catch (e: unknown) {
-        log(`[pumpdev-newtoken] Parse error: ${(e as Error).message}`, "error");
-      }
-    });
-
-    ws.on("close", (code, reason) => {
-      log(`[pumpdev-newtoken] Closed (${code}): ${reason || "no reason"}`, "warn");
-      pdNtWs = null;
-      if (!state.isRunning) return;
-      const penalty = err403(String(reason)) ? 30_000 : undefined;
-      schedulePumpDevNewTokenReconnect(penalty);
-    });
-
-    ws.on("error", (err) => {
-      log(`[pumpdev-newtoken] Error: ${err.message}`, "error");
-      if (err403(err.message) && state.isRunning) schedulePumpDevNewTokenReconnect(30_000);
-    });
-  } catch (e: unknown) {
-    log(`[pumpdev-newtoken] Failed to connect: ${(e as Error).message}`, "error");
-    if (state.isRunning) schedulePumpDevNewTokenReconnect();
-  }
-}
 
 function err403(msg: string) { return msg.includes("403"); }
 
-// ---------------------------------------------------------------------------
-// Test provider (coordinator's own PumpDev connection)
-// ---------------------------------------------------------------------------
+const PD_BACKOFF_MIN = 2_000;
+const PD_BACKOFF_MAX = 60_000;
+let pdBackoffMs = PD_BACKOFF_MIN;
+let pdReconnectTimer: NodeJS.Timeout | undefined;
 
-export function connectTestPumpDev() {
-  const wsUrl = "wss://pumpdev.io/ws";
+function schedulePumpDevReconnect(penaltyMs?: number) {
+  if (pdReconnectTimer) return;
+  const delay = penaltyMs ?? pdBackoffMs;
+  log(`[pumpdev] Reconnecting in ${Math.round(delay / 1000)}s`, "warn");
+  pdReconnectTimer = setTimeout(() => {
+    pdReconnectTimer = undefined;
+    connectPumpDev();
+  }, delay);
+  if (!penaltyMs) pdBackoffMs = Math.min(pdBackoffMs * 2, PD_BACKOFF_MAX);
+}
+
+export function connectPumpDev() {
   let ws: WebSocket;
-
   try {
-    ws = new WebSocket(wsUrl);
+    ws = new WebSocket("wss://pumpdev.io/ws");
     state.testConnection = ws;
     state.testLastTradeAt = Date.now();
 
     ws.on("open", () => {
-      log("[test] Connected to PumpDev");
+      pdBackoffMs = PD_BACKOFF_MIN;
+      log("[pumpdev] Connected — subscribing to newToken stream and existing trade subscriptions");
+      ws.send(JSON.stringify({ method: "subscribeNewToken" }));
       if (state.testSubscriptions.size > 0) {
         const mints = [...state.testSubscriptions];
         for (let i = 0; i < mints.length; i += 100) {
           ws.send(JSON.stringify({ method: "subscribeTokenTrade", keys: mints.slice(i, i + 100) }));
         }
-        log(`[test] Re-subscribed to ${mints.length} existing mints`);
+        log(`[pumpdev] Re-subscribed to ${mints.length} existing trade mints`);
       }
     });
 
     ws.on("message", async (raw: Buffer) => {
+      if (!state.isRunning) return;
       try {
         const data = JSON.parse(raw.toString());
-        if (data.error || !data.signature) return;
+        if (!data.mint) return;
 
-        state.totalTrades++;
-        const now = Date.now();
-        state.testLastTradeAt = now;
-        state.testIsStalled = false;
-
-        const wallet: string | undefined = data.traderPublicKey ?? data.buyer ?? undefined;
-        if (wallet) state.uniqueWallets.add(wallet);
-
-        await db.insert(tradesTable).values({
-          mint: data.mint,
-          provider: "test",
-          signature: data.signature,
-          wallet: wallet ?? null,
-          receivedAt: now,
-        });
-
-        await checkTradeResumeCompletion("test", now);
+        if (data.signature) {
+          // Trade event
+          state.totalTrades++;
+          const now = Date.now();
+          state.testLastTradeAt = now;
+          state.testIsStalled = false;
+          const wallet: string | undefined = data.traderPublicKey ?? data.buyer ?? undefined;
+          if (wallet) state.uniqueWallets.add(wallet);
+          await db.insert(tradesTable).values({
+            mint: data.mint,
+            provider: "test",
+            signature: data.signature,
+            wallet: wallet ?? null,
+            receivedAt: now,
+          });
+          await checkTradeResumeCompletion("test", now);
+        } else if (data.txType !== "migrate") {
+          // New token event
+          state.pumpDevNewTokenLastAt = Date.now();
+          state.pumpDevNewTokenIsStalled = false;
+          if (state.sourceNewToken) {
+            await assignAndSubscribeMint(data.mint);
+          } else {
+            state.seenMints.add(data.mint);
+          }
+        }
       } catch (e: unknown) {
-        log(`[test] Error: ${(e as Error).message}`, "error");
+        log(`[pumpdev] Error: ${(e as Error).message}`, "error");
       }
     });
 
-    ws.on("error", (err) => {
-      log(`[test] WebSocket error: ${err.message}`, "error");
+    ws.on("close", (code, reason) => {
+      log(`[pumpdev] Closed (${code}): ${reason || "no reason"}`, "warn");
+      if (!state.isRunning) return;
+      const penalty = err403(String(reason)) ? 30_000 : undefined;
+      schedulePumpDevReconnect(penalty);
     });
 
-    ws.on("close", () => {
-      log("[test] Connection closed — reconnecting in 2s", "warn");
-      if (state.isRunning) setTimeout(() => connectTestPumpDev(), 2000);
+    ws.on("error", (err) => {
+      log(`[pumpdev] Error: ${err.message}`, "error");
+      if (err403(err.message) && state.isRunning) schedulePumpDevReconnect(30_000);
     });
   } catch (e: unknown) {
-    log(`[test] Failed to connect: ${(e as Error).message}`, "error");
+    log(`[pumpdev] Failed to connect: ${(e as Error).message}`, "error");
+    if (state.isRunning) schedulePumpDevReconnect();
   }
 }
 
@@ -626,14 +589,14 @@ export async function detectStalls() {
     }
   }
 
-  // PumpDev newToken backup stall detection
+  // PumpDev newToken backup stall detection (same connection as trade stream)
   const pumpDevNewTokenHealthy = (now - state.pumpDevNewTokenLastAt) <= PUMPPORTAL_STALL_THRESHOLD;
   if (!pumpDevNewTokenHealthy) {
     state.pumpDevNewTokenIsStalled = true;
     if (coordinatorHasToken) {
-      // PumpPortal is healthy — reconnect PumpDev backup individually
-      log(`[pumpdev-newtoken] Stalled (silent ${Math.round((now - state.pumpDevNewTokenLastAt) / 1000)}s), reconnecting`, "warn");
-      schedulePumpDevNewTokenReconnect();
+      // PumpPortal is healthy — reconnect PumpDev (trade+newToken) individually
+      log(`[pumpdev] Stalled (silent ${Math.round((now - state.pumpDevNewTokenLastAt) / 1000)}s), reconnecting`, "warn");
+      schedulePumpDevReconnect();
     }
   } else {
     state.pumpDevNewTokenIsStalled = false;
@@ -650,7 +613,7 @@ export async function detectStalls() {
       state.pumpPortalPingInterval = undefined;
     }
     schedulePumpPortalReconnect();
-    schedulePumpDevNewTokenReconnect();
+    schedulePumpDevReconnect();
     for (const proxyId of state.proxies.keys()) {
       sendToProxy(proxyId, { type: "reset_pumpportal" });
     }
@@ -712,9 +675,8 @@ export async function startTest(sourceNewToken: boolean) {
 
   await db.execute(sql`TRUNCATE tokens, trades, resets, migrations, rotations`);
 
-  connectTestPumpDev();
+  connectPumpDev();
   connectPumpPortal();
-  connectPumpDevNewToken();
 
   await new Promise((resolve) => setTimeout(resolve, 1000));
 
@@ -773,9 +735,8 @@ export async function autoResumeTest() {
 
   log(`[resume] Resuming: ${existingTokens.length} tokens, ${state.testSubscriptions.size} on test`);
 
-  connectTestPumpDev();
+  connectPumpDev();
   connectPumpPortal();
-  connectPumpDevNewToken();
 
   await new Promise((resolve) => setTimeout(resolve, 1000));
 
@@ -791,13 +752,9 @@ export function stopTest() {
     clearInterval(state.pumpPortalPingInterval);
     state.pumpPortalPingInterval = undefined;
   }
-  if (pdNtWs) {
-    pdNtWs.close();
-    pdNtWs = null;
-  }
-  if (pdNtReconnectTimer) {
-    clearTimeout(pdNtReconnectTimer);
-    pdNtReconnectTimer = undefined;
+  if (pdReconnectTimer) {
+    clearTimeout(pdReconnectTimer);
+    pdReconnectTimer = undefined;
   }
   if (ppReconnectTimer) {
     clearTimeout(ppReconnectTimer);
