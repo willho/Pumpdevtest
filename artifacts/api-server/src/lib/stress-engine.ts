@@ -138,7 +138,14 @@ function schedulePumpPortalReconnect(penaltyMs?: number) {
 function connectPumpPortal() {
   let ws: WebSocket;
   try {
+    // Close any existing portal connection before opening a new one
+    if (state.pumpPortalWs) {
+      state.pumpPortalWs.removeAllListeners();
+      state.pumpPortalWs.close();
+      state.pumpPortalWs = null;
+    }
     ws = new WebSocket("wss://pumpportal.fun/api/data");
+    state.pumpPortalWs = ws;
 
     ws.on("open", () => {
       ppBackoffMs = PP_BACKOFF_MIN; // reset on success
@@ -185,13 +192,14 @@ function connectPumpPortal() {
 
     ws.on("close", (code, reason) => {
       log(`[pumpportal] Closed (${code}): ${reason || "no reason"}`, "warn");
+      state.pumpPortalWs = null;
       if (state.pumpPortalPingInterval) {
         clearInterval(state.pumpPortalPingInterval);
         state.pumpPortalPingInterval = undefined;
       }
       if (!state.isRunning) return;
-      // 403 = rate-limited / banned — start with a longer penalty
-      const penalty = code === 1006 && String(reason).includes("403") ? 30_000 : undefined;
+      // 1006 = abnormal TCP drop (rate-limit / ban) — always apply penalty
+      const penalty = code === 1006 ? 30_000 : undefined;
       schedulePumpPortalReconnect(penalty);
     });
 
@@ -231,12 +239,21 @@ function schedulePumpDevReconnect(penaltyMs?: number) {
 export function connectPumpDev() {
   let ws: WebSocket;
   try {
+    // Close stale connection before creating a new one
+    if (state.testConnection) {
+      state.testConnection.removeAllListeners();
+      state.testConnection.close();
+      state.testConnection = null;
+    }
+    // Reset stall clock immediately so the detector doesn't fire while the socket is opening
+    state.pumpDevNewTokenLastAt = Date.now();
     ws = new WebSocket("wss://pumpdev.io/ws");
     state.testConnection = ws;
     state.testLastTradeAt = Date.now();
 
     ws.on("open", () => {
       pdBackoffMs = PD_BACKOFF_MIN;
+      state.pumpDevNewTokenLastAt = Date.now();
       log("[pumpdev] Connected — subscribing to newToken stream and existing trade subscriptions");
       ws.send(JSON.stringify({ method: "subscribeNewToken" }));
       if (state.testSubscriptions.size > 0) {
@@ -511,6 +528,7 @@ async function handleAtCapacity(mint: string, target: string): Promise<boolean> 
 
 export async function detectStalls() {
   if (!state.isRunning) return;
+  if (state.totalTokens < 10) return;
 
   const now = Date.now();
   let stalledCount = 0;
@@ -661,6 +679,10 @@ export async function startTest(sourceNewToken: boolean) {
   state.uniqueWallets = new Set();
   state.testStartAt = Date.now();
 
+  // Clean up any connections left over from a previous run before starting fresh
+  if (pdReconnectTimer) { clearTimeout(pdReconnectTimer); pdReconnectTimer = undefined; }
+  if (ppReconnectTimer) { clearTimeout(ppReconnectTimer); ppReconnectTimer = undefined; }
+
   for (const proxy of state.proxies.values()) {
     proxy.subscriptions = new Set();
     proxy.isStalled = false;
@@ -701,6 +723,10 @@ export async function autoResumeTest() {
     await startTest(true);
     return;
   }
+
+  // Clean up any connections left over from a previous crashed run before starting fresh
+  if (pdReconnectTimer) { clearTimeout(pdReconnectTimer); pdReconnectTimer = undefined; }
+  if (ppReconnectTimer) { clearTimeout(ppReconnectTimer); ppReconnectTimer = undefined; }
 
   state.isRunning = true;
   state.mode = "RUNNING";
