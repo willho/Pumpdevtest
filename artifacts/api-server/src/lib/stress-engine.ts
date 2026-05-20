@@ -494,48 +494,64 @@ export async function detectStalls() {
   if (!state.isRunning) return;
 
   const now = Date.now();
-  let stalledCount = 0;
 
-  // Test provider (trade stream)
-  if (state.testSubscriptions.size >= 10) {
-    if (now - state.testLastTradeAt > DETECTION_WINDOW) {
-      if (now - state.testLastResetAt > RESET_COOLDOWN) {
-        state.testIsStalled = true;
-        state.testLastResetAt = now;
-        const silentMs = Math.round((now - state.testLastTradeAt) / 1000);
-        await db.insert(resetsTable).values({ provider: "test", resetTriggeredAt: now });
-        log(`[test] STALL — ${silentMs}s silent — resetting connection`, "warn");
-        state.testConnection?.close();
-      }
-      stalledCount++;
-    } else {
-      state.testIsStalled = false;
-    }
-  }
+  // --- Pass 1: identify stalled providers WITHOUT sending any resets yet ---
+  const testEligible = state.testSubscriptions.size >= 10;
+  const testStalled = testEligible && (now - state.testLastTradeAt > DETECTION_WINDOW);
 
-  // Proxy providers (trade streams)
+  const stalledProxies: Array<[string, typeof state.proxies extends Map<string, infer V> ? V : never]> = [];
+  const healthyProxies: Array<[string, typeof state.proxies extends Map<string, infer V> ? V : never]> = [];
   for (const [proxyId, proxy] of state.proxies) {
     if (proxy.subscriptions.size < 10) continue;
     if (now - proxy.lastTradeAt > DETECTION_WINDOW) {
+      stalledProxies.push([proxyId, proxy]);
+    } else {
+      healthyProxies.push([proxyId, proxy]);
+    }
+  }
+
+  const totalEligible = (testEligible ? 1 : 0) + stalledProxies.length + healthyProxies.length;
+  const stalledCount = (testStalled ? 1 : 0) + stalledProxies.length;
+
+  // Symmetric = every eligible provider is silent at once → almost certainly upstream silence,
+  // not individual provider failures. Skip resets to avoid a thundering-herd reconnect storm.
+  const isSymmetric = totalEligible >= 2 && stalledCount >= totalEligible;
+
+  // --- Update stall flags ---
+  state.testIsStalled = testStalled;
+  for (const [, proxy] of stalledProxies) proxy.isStalled = true;
+  for (const [, proxy] of healthyProxies) proxy.isStalled = false;
+
+  // --- Pass 2: send resets only for asymmetric (isolated) stalls ---
+  if (!isSymmetric) {
+    if (testStalled && now - state.testLastResetAt > RESET_COOLDOWN) {
+      state.testLastResetAt = now;
+      const silentMs = Math.round((now - state.testLastTradeAt) / 1000);
+      await db.insert(resetsTable).values({ provider: "test", resetTriggeredAt: now });
+      log(`[test] STALL — ${silentMs}s silent — resetting connection`, "warn");
+      state.testConnection?.close();
+    }
+    for (const [proxyId, proxy] of stalledProxies) {
       if (now - proxy.lastResetAt > RESET_COOLDOWN) {
-        proxy.isStalled = true;
         proxy.lastResetAt = now;
         const silentMs = Math.round((now - proxy.lastTradeAt) / 1000);
         await db.insert(resetsTable).values({ provider: proxyId, resetTriggeredAt: now });
         log(`[${proxy.name}] STALL — ${silentMs}s silent — sending reset`, "warn");
         sendToProxy(proxyId, { type: "reset" });
       }
-      stalledCount++;
-    } else {
-      proxy.isStalled = false;
     }
   }
 
-  // Simultaneous stall detection (trade streams)
+  // --- Simultaneous stall: ratio-based (>50% of eligible providers silent) ---
   const wasSimultaneous = state.simultaneousStall;
-  state.simultaneousStall = stalledCount >= 2;
+  state.simultaneousStall = totalEligible >= 2 && stalledCount / totalEligible > 0.5;
   if (state.simultaneousStall && !wasSimultaneous) {
-    log(`!! SIMULTANEOUS STALL — ${stalledCount} providers stalled at once`, "error");
+    const disposition = isSymmetric
+      ? "upstream silence suspected — resets suppressed"
+      : "asymmetric — resets sent to stalled providers";
+    log(`!! SIMULTANEOUS STALL — ${stalledCount}/${totalEligible} providers (${disposition})`, "error");
+  } else if (!state.simultaneousStall && wasSimultaneous) {
+    log(`[stall] Simultaneous stall cleared`, "warn");
   }
 
   // PumpPortal stream stall detection
