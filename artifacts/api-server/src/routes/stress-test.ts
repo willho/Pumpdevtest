@@ -122,6 +122,7 @@ Capacity Limit:           ${capacityLimit} unique tokens
 Total Tokens Discovered:  ${tokensCount}
 Total Trades Captured:    ${tradesCount}
 Total Resets Triggered:   ${resetsCount}
+Total Migrations:         ${state.totalMigrations}
 Connected Proxies:        ${state.proxies.size}
 
 PROVIDER BREAKDOWN
