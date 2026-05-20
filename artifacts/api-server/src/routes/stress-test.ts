@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { tokensTable, tradesTable, resetsTable } from "@workspace/db/schema";
-import { sql, eq, or } from "drizzle-orm";
+import { tokensTable, tradesTable, resetsTable, migrationsTable } from "@workspace/db/schema";
+import { sql, eq, or, desc } from "drizzle-orm";
 import { state, log, PER_PROVIDER_LIMIT } from "../lib/stress-state.js";
 import { startTest, stopTest } from "../lib/stress-engine.js";
 
@@ -201,6 +201,75 @@ router.get("/tokens/:provider", async (req, res) => {
       )
       .limit(200);
 
+    res.json(rows);
+  } catch (e: unknown) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// DB inspection endpoints
+// ---------------------------------------------------------------------------
+
+router.get("/db/summary", async (_req, res) => {
+  try {
+    const [tokensCount, tradesCount, resetsCount, migrationsCount] = await Promise.all([
+      db.$count(tokensTable),
+      db.$count(tradesTable),
+      db.$count(resetsTable),
+      db.$count(migrationsTable),
+    ]);
+    res.json({ tokens: tokensCount, trades: tradesCount, resets: resetsCount, migrations: migrationsCount });
+  } catch (e: unknown) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+router.get("/db/tokens", async (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query["limit"] ?? 200), 1000);
+    const offset = Number(req.query["offset"] ?? 0);
+    const rows = await db
+      .select()
+      .from(tokensTable)
+      .orderBy(desc(tokensTable.assignedAt))
+      .limit(limit)
+      .offset(offset);
+    res.json(rows);
+  } catch (e: unknown) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+router.get("/db/trades", async (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query["limit"] ?? 200), 1000);
+    const offset = Number(req.query["offset"] ?? 0);
+    const mint = req.query["mint"] as string | undefined;
+    const query = db.select().from(tradesTable);
+    const rows = await (mint
+      ? query.where(eq(tradesTable.mint, mint)).orderBy(desc(tradesTable.receivedAt)).limit(limit).offset(offset)
+      : query.orderBy(desc(tradesTable.receivedAt)).limit(limit).offset(offset));
+    res.json(rows);
+  } catch (e: unknown) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+router.get("/db/resets", async (_req, res) => {
+  try {
+    const rows = await db.select().from(resetsTable).orderBy(desc(resetsTable.resetTriggeredAt)).limit(200);
+    res.json(rows);
+  } catch (e: unknown) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+router.get("/db/migrations", async (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query["limit"] ?? 200), 1000);
+    const offset = Number(req.query["offset"] ?? 0);
+    const rows = await db.select().from(migrationsTable).orderBy(desc(migrationsTable.detectedAt)).limit(limit).offset(offset);
     res.json(rows);
   } catch (e: unknown) {
     res.status(500).json({ error: (e as Error).message });
