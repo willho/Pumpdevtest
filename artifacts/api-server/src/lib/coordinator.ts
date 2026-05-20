@@ -2,8 +2,8 @@ import { WebSocketServer, WebSocket } from "ws";
 import type { Server } from "http";
 import { randomUUID } from "crypto";
 import { db } from "@workspace/db";
-import { tradesTable, migrationsTable, tokensTable } from "@workspace/db/schema";
-import { state, log, MIGRATION_STALL_THRESHOLD } from "./stress-state.js";
+import { tradesTable, tokensTable } from "@workspace/db/schema";
+import { state, log } from "./stress-state.js";
 import { checkTradeResumeCompletion, assignAndSubscribeMint } from "./stress-engine.js";
 
 export function startCoordinator(server: Server) {
@@ -57,9 +57,6 @@ export function startCoordinator(server: Server) {
           const pumpportalPingOffsetMin = Math.floor(
             (proxyIndex * 30) / totalProxies
           );
-          const migrationPingOffsetMin = Math.floor(
-            (proxyIndex * 30) / totalProxies
-          );
           state.proxies.set(proxyId, {
             id: proxyId,
             name,
@@ -75,7 +72,6 @@ export function startCoordinator(server: Server) {
           });
           state.proxyWs.set(proxyId, ws);
           state.proxyPumpPortalLastNewTokenAt.set(proxyId, Date.now());
-          state.migrationProviderLastEventAt.set(name, Date.now());
 
           if (Array.isArray(msg["existingSubscriptions"])) {
             const existing = msg["existingSubscriptions"] as string[];
@@ -118,7 +114,6 @@ export function startCoordinator(server: Server) {
               type: "welcome",
               proxyId,
               pumpportalPingOffsetMin,
-              migrationPingOffsetMin,
               reconnectAfterSec,
             })
           );
@@ -196,7 +191,7 @@ export function startCoordinator(server: Server) {
               assigned++;
             }
           }
-          if (assigned > 0) log(`[coordinator] Proxy ${name} flushed ${assigned} buffered mints`);
+          if (assigned > 0) log(`[coordinator] Proxy ${proxy.name} flushed ${assigned} buffered mints`);
           return;
         }
 
@@ -207,48 +202,19 @@ export function startCoordinator(server: Server) {
             .filter(t => t["mint"] && t["signature"])
             .map(t => ({
               mint: String(t["mint"]),
-              provider: proxyId,
+              provider: String(proxyId),
               signature: String(t["signature"]),
-              wallet: t["wallet"] ? String(t["wallet"]) : null,
+              wallet: t["wallet"] ? String(t["wallet"]) : undefined,
               receivedAt: Number(t["receivedAt"] ?? Date.now()),
             }));
           if (rows.length > 0) {
             await db.insert(tradesTable).values(rows).onConflictDoNothing();
             state.totalTrades += rows.length;
           }
-          log(`[coordinator] Proxy ${name} flushed ${rows.length} buffered trades`);
+          log(`[coordinator] Proxy ${proxy.name} flushed ${rows.length} buffered trades`);
           return;
         }
 
-        if (msg["type"] === "migration_detected") {
-          const mint = String(msg["mint"] ?? "");
-          const poolAddress = String(msg["poolAddress"] ?? "");
-          const signature = String(msg["signature"] ?? "");
-          const provider = String(msg["provider"] ?? "");
-          if (!mint || !poolAddress || !signature) return;
-
-          const now = Date.now();
-          state.migrationProviderLastEventAt.set(provider, now);
-          state.migrationProvidersStalled.delete(provider);
-          state.totalMigrations++;
-
-          if (!state.seenMints.has(mint)) {
-            state.seenMints.add(mint);
-            log(
-              `[coordinator] Migration detected: ${mint.slice(0, 8)}... (pool: ${poolAddress.slice(0, 8)}...)`
-            );
-          }
-
-          await db.insert(migrationsTable).values({
-            mint,
-            poolAddress,
-            signature,
-            provider,
-            detectedAt: now,
-            mintAmount: msg["mintAmount"] ? String(msg["mintAmount"]) : "0",
-            solAmount: msg["solAmount"] ? String(msg["solAmount"]) : "0",
-          }).onConflictDoNothing();
-        }
       } catch (e: unknown) {
         log(`[coordinator] Message error: ${(e as Error).message}`, "error");
       }
@@ -287,23 +253,3 @@ export function startDiscoveryStreams(): void {
   log("[coordinator] Sent start_discovery signal to all proxies");
 }
 
-export function checkMigrationProviderStall(): void {
-  if (state.totalMigrations < 10) return;
-  const now = Date.now();
-
-  for (const [provider, lastEventTime] of state.migrationProviderLastEventAt) {
-    const timeSilent = now - lastEventTime;
-
-    if (timeSilent > MIGRATION_STALL_THRESHOLD) {
-      if (!state.migrationProvidersStalled.has(provider)) {
-        state.migrationProvidersStalled.add(provider);
-        log(
-          `[stall-detector] Migration provider ${provider} stalled (${timeSilent}ms), needs reset`,
-          "warn"
-        );
-      }
-    } else {
-      state.migrationProvidersStalled.delete(provider);
-    }
-  }
-}
