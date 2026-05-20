@@ -31,7 +31,6 @@ import {
 
 export default function Dashboard() {
   const [sourceNewToken, setSourceNewToken] = useState(true);
-  const [sourceMigration, setSourceMigration] = useState(false);
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
 
   const { data: statusData, isLoading: isLoadingStatus } = useGetTestStatus({
@@ -75,7 +74,7 @@ export default function Dashboard() {
   const handleStart = () => {
     setShowReport(false);
     setSelectedProvider(null);
-    startTest.mutate({ sourceNewToken, sourceMigration });
+    startTest.mutate({ sourceNewToken });
   };
 
   const handleStop = () => {
@@ -164,11 +163,11 @@ export default function Dashboard() {
                 onChange={setSourceNewToken}
               />
               <SourceToggle
-                label="MIGRATION"
-                description="subscribeMigration"
-                active={sourceMigration}
-                disabled={isRunning}
-                onChange={setSourceMigration}
+                label="PUMPDEV_BACKUP"
+                description="subscribeNewToken (PumpDev)"
+                active={true}
+                disabled={true}
+                onChange={() => {}}
               />
             </CardContent>
           </Card>
@@ -223,8 +222,6 @@ export default function Dashboard() {
         {/* METRICS GRID */}
         <section className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4">
           <StatBox label="SUBSCRIPTIONS" value={statusData?.subscriptionsCount ?? 0} icon={Activity} />
-          <StatBox label="MIGRATIONS" value={statusData?.totalMigrations ?? 0} icon={Database} highlight={!!(statusData?.totalMigrations && statusData.totalMigrations > 0)} />
-          <StatBox label="ALT_POOL" value={statusData?.nonPumpSwapMigrations ?? 0} icon={Database} highlight={!!(statusData?.nonPumpSwapMigrations && statusData.nonPumpSwapMigrations > 0)} />
           <StatBox label="TOTAL_TOKENS" value={statusData?.totalTokens ?? 0} icon={Server} />
           <StatBox
             label="ROTATIONS"
