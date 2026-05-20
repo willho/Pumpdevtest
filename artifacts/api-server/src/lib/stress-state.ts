@@ -33,6 +33,7 @@ export interface StressState {
   proxyWs: Map<string, WebSocket>;
   totalTokens: number;
   totalTrades: number;
+  totalMigrations: number;
   totalRotations: number;
   subscriptionsCount: number;
   rotationCount: number;
@@ -66,6 +67,7 @@ export const state: StressState = {
   proxyWs: new Map(),
   totalTokens: 0,
   totalTrades: 0,
+  totalMigrations: 0,
   totalRotations: 0,
   subscriptionsCount: 0,
   rotationCount: 0,
